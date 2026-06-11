@@ -1,0 +1,1 @@
+Ảnh hoá đơn bỏ vào folder input này nhé

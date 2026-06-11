@@ -1,6 +1,6 @@
 Chạy code trong train_yolo_ipynb bên trong src
 
-Nhớ Restart Kernel trước khi commit
+Nhớ Restart Kernel và Clear All Outputs trước khi commit
 
 Input ảnh trong Folder input và outputs sẽ xuất ra trong folder outputs
 

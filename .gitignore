@@ -1,0 +1,9 @@
+/Seg_OCR_Tri/receipt_dataset
+/Seg_OCR_Tri/receipt-segmentation-1
+/Seg_OCR_Tri/runs
+yolo26n.pt
+yolov8n.pt
+yolov8n-seg.pt
+*.jpg
+*.png
+

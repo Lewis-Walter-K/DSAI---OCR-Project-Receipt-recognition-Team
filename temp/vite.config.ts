@@ -7,9 +7,9 @@ import { execFile } from 'child_process'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..')
-const PYTHON_EXEC = path.join(PROJECT_ROOT, 'venv', 'Scripts', 'python.exe') // Assuming Windows
+const PYTHON_EXEC = path.join(PROJECT_ROOT, '.venv', 'Scripts', 'python.exe')
 const MAIN_PY = path.join(PROJECT_ROOT, 'Candidate_classification', 'main.py')
-const UPLOAD_DIR = path.join(PROJECT_ROOT, 'Seg_OCR_Tri', 'input')
+const UPLOAD_DIR = path.join(PROJECT_ROOT, 'Candidate_classification', 'input')
 
 function pythonApiPlugin() {
   return {

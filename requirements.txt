@@ -26,5 +26,5 @@ xxhash==3.7.0
 python-dotenv==1.2.2
 
 # SLM & GenAI API
-google-generativeai==0.8.3
-pydantic==2.13.4
+# google-generativeai==0.8.3
+# pydantic==2.13.4

@@ -575,9 +575,24 @@ def process_invoice(raw_image_path: str) -> dict:
 
     print(f"\n{'='*50}")
     if result['predicted_value']:
-        print(f" KẾT QUẢ CUỐI CÙNG: {result['predicted_value']}")
+        print(f"🎯 KẾT QUẢ CUỐI CÙNG: {result['predicted_value']}")
     else:
-        print(" XGBoost không tự tin — App sẽ gọi SLM để xác nhận.")
+        print("⚠️ XGBoost & NLI không tự tin — KÍCH HOẠT SLM FALLBACK...")
+        import sys
+        slm_path = str(CURRENT_DIR.parent / "SLM")
+        if slm_path not in sys.path:
+            sys.path.append(slm_path)
+        from slm_api import process_ocr_with_gemini
+        
+        slm_result = process_ocr_with_gemini(result['ocr_text'])
+        print(f"🧠 SLM JSON OUTPUT:\n{slm_result.model_dump_json(indent=2)}")
+        
+        # Update pipeline result with SLM fallback data
+        result['predicted_value'] = slm_result.total_amount
+        result['status'] = 'slm_fallback'
+        # Pass the full JSON structure back to the frontend/database
+        result['structured_data'] = slm_result.model_dump()
+        
     print(f"{'='*50}\n")
 
     return result

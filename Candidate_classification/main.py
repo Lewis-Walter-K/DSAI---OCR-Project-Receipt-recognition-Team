@@ -590,7 +590,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         img_path = sys.argv[1]
     else:
-        img_path = str(PROJECT_ROOT / "Seg_OCR_Tri" / "input" / "test11.jpg")
+        img_path = str(PROJECT_ROOT / "Seg_OCR_Tri" / "input" / "test1.jpg")
 
     if not os.path.exists(img_path):
         print(f" Không tìm thấy file ảnh: {img_path}")

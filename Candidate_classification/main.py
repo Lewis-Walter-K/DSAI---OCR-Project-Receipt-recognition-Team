@@ -386,10 +386,15 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
 
     is_confident = best['xgb_score'] >= MIN_CONFIDENCE
 
-    # ── Hybrid NLI Reranker (Trọng tài Logic) ────────────────────────────
-    # We call the heavy NLI model to inspect the Top 5 candidates from XGBoost.
-    print("\n🧠 Kích hoạt NLI Reranker trên Top 5 ứng viên...")
-    top_5 = sorted(candidates, key=lambda x: x['xgb_score'], reverse=True)[:5]
+    # ── Hybrid NLI Reranker (Sem > NLI > XGBoost) ────────────────────────────
+    # We call the heavy NLI model to inspect the Top 5 candidates based primarily on Semantic Similarity
+    print("\n🧠 Kích hoạt NLI Reranker theo thứ tự: Sem > NLI > XGBoost...")
+    
+    if all_sem_zero:
+        top_5 = sorted(candidates, key=lambda x: x['xgb_score'], reverse=True)[:5]
+    else:
+        top_5 = sorted(candidates, key=lambda x: (x['semantic_sim'], x['xgb_score']), reverse=True)[:5]
+
     nli_promoted = None
     nli_best_score = 0.0
 
@@ -402,10 +407,11 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
         best_label = result['labels'][0]
         best_prob = result['scores'][0]
 
-        print(f"   - NLI đọc '{c['neighbor']}': {best_label} ({best_prob*100:.1f}%)")
+        print(f"   - NLI đọc '{c['neighbor']}' [Sem: {c['semantic_sim']:.2f}]: {best_label} ({best_prob*100:.1f}%)")
 
-        # Check if NLI believes this is the total amount
-        if best_label == "total amount to pay" and best_prob > 0.50:
+        # Check if NLI believes this is the total amount. 
+        # Lowered threshold to 40% to account for unaccented Vietnamese (e.g. 'Tong tien')
+        if best_label == "total amount to pay" and best_prob >= 0.40:
             if best_prob > nli_best_score:
                 nli_promoted = c
                 nli_best_score = best_prob
@@ -413,7 +419,7 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
     if nli_promoted:
         best = nli_promoted
         is_confident = True
-        print(f"\n🎯 NLI RERANK CHỐT: {best['value']} (NLI Conf: {nli_best_score*100:.1f}%)")
+        print(f"\n🎯 NLI RERANK CHỐT: {best['value']} (NLI Conf: {nli_best_score*100:.1f}%, Sem: {best['semantic_sim']:.2f})")
     elif not is_confident:
         print("\n⚠️ XGBoost & NLI đều không tự tin — cần fallback SLM hoặc user validation.")
 
@@ -605,7 +611,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         img_path = sys.argv[1]
     else:
-        img_path = str(CURRENT_DIR / "input" / "test1.jpg")
+        img_path = str(CURRENT_DIR / "input" / "test6.png")
 
     if not os.path.exists(img_path):
         print(f" Không tìm thấy file ảnh: {img_path}")

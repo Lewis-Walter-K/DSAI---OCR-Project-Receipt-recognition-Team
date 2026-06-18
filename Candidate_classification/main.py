@@ -190,26 +190,7 @@ def img_scanner(img_path: str) -> str | None:
     flat = _flatten_receipt(cropped, pts)
 
     # --- Rotate (Tesseract OSD) ---
-    pytesseract.pytesseract.tesseract_cmd = (
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    )
-    try:
-        osd        = pytesseract.image_to_osd(flat, output_type=Output.DICT)
-        angle      = osd["rotate"]
-        confidence = osd["orientation_conf"]
-        print(f"🔍 OSD dự đoán {angle}° | confidence: {confidence:.2f}")
-        if confidence >= 4.0:
-            ROTATE_MAP = {
-                90:  cv2.ROTATE_90_CLOCKWISE,
-                180: cv2.ROTATE_180,
-                270: cv2.ROTATE_90_COUNTERCLOCKWISE,
-            }
-            if angle in ROTATE_MAP and angle not in [90, 270]:  # guard portrait
-                flat = cv2.rotate(flat, ROTATE_MAP[angle])
-        else:
-            print("⚠️ OSD confidence quá thấp, bỏ qua xoay.")
-    except Exception as e:
-        print(f"⚠️ Lỗi OSD: {e}")
+    # Removed Tesseract OSD in favor of PaddleOCR's built-in angle classifier.
 
     # --- Adaptive threshold (CamScanner-style) ---
     gray     = cv2.cvtColor(flat, cv2.COLOR_BGR2GRAY)

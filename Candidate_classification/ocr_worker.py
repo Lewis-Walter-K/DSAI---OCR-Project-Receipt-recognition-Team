@@ -16,7 +16,7 @@ def ocr_and_fix_orientation_v2(image_path, ocr_model):
         raise ValueError(f"Không thể đọc ảnh: {image_path}")
         
     best_image = img.copy()
-    result = ocr_model.ocr(best_image, cls=False)
+    result = ocr_model.ocr(best_image, cls=True)
     
     final_text_results = []
     if result and result[0] is not None:
@@ -30,7 +30,7 @@ def ocr_and_fix_orientation_v2(image_path, ocr_model):
     return final_text_results, best_image.shape[0]
 
 print("Khoi tao PaddleOCR (Doc lap)...")
-ocr_model = PaddleOCR(use_angle_cls=False, show_log=False, use_gpu=False)
+ocr_model = PaddleOCR(use_angle_cls=True, show_log=False, use_gpu=False)
 
 results = {}
 

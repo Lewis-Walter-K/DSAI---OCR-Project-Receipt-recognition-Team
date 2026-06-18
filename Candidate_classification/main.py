@@ -14,6 +14,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import pytesseract
 from ultralytics import YOLO
 from pytesseract import Output
+from transformers import pipeline
 
 # ─────────────────────────────────────────────────────
 #  PATH SETUP  (works on any machine, any user)
@@ -40,6 +41,18 @@ embedding_model = SentenceTransformer(
     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 )
 
+nli_classifier = pipeline(
+    "zero-shot-classification", 
+    model="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
+)
+
+NLI_LABELS = [
+    "total amount to pay", 
+    "tax amount", 
+    "transaction code or ID", 
+    "item quantity or subtotal"
+]
+
 xgb_model = xgb.XGBClassifier()
 if XGB_MODEL_PATH.exists():
     xgb_model.load_model(str(XGB_MODEL_PATH))
@@ -47,23 +60,51 @@ else:
     print(f"❌ Lỗi: Không tìm thấy model {XGB_MODEL_PATH}")
     sys.exit(1)
 
-# Semantic anchor vectors
-POSITIVE_VECTOR = embedding_model.encode([
-    "order total, total amount to pay, grand total, final total, "
-    "tổng cộng, tổng tiền, thành tiền, thanh toán, "
-    "amount due, total due, balance due, total-eft, net total"
-])[0]
-NEGATIVE_VECTOR = embedding_model.encode([
-    "tax, transaction ID, reference code, authorization, phone number, "
-    "date, time, credit card, subtotal, tax amount, change due, tiền nhận, tiền thừa"
-    "item code, sku, barcode"
-])[0]
+# ── Semantic anchor vectors ─────────────────────────────────────────
+# Architecture: 4 anchors covering all major "noise" categories.
+# A candidate's context must be CLOSER to POSITIVE than ALL other anchors.
+# Adding a new language = add 1 line per anchor. No blacklists ever needed.
+def _flatten(prompts):
+    return [x.strip() for p in prompts for x in p.split(',') if x.strip()]
 
-METADATA_BLACKLIST = {
-    'tax', 'id', 'code', 'trn', 'auth', 'seq', 'acq',
-    'phone', 'tel', 'date', 'time', 'mastercard', 'visa',
-    'cashier', 'store', 'register', 'pm', 'am', 'terminal'
-}
+_pos_prompts = _flatten([
+    "order total, grand total, total amount to pay, amount due, balance due, net total, total-eft",  # EN
+    "tổng cộng, tổng tiền, thành tiền, thanh toán, số tiền thanh toán",                             # VI
+    "tong cong, tong tien, thanh tien, thanh toan, so tien thanh toan",                             # VI (no accent)
+    "消费合计, 合计, 总计, 实付金额, 应付金额, 收款金额, 结账金额",                                          # ZH
+    "合計, お会計, 請求金額, 支払合計, お支払い金額",                                                      # JA
+    "합계, 총액, 결제금액, 청구금액, 지불합계",                                                          # KO
+])
+_neg_prompts = _flatten([
+    "transaction ID, reference code, authorization code, barcode, serial number, phone number",     # EN
+    "mã giao dịch, mã tham chiếu, mã vạch, số điện thoại, mã hóa đơn, tiền thừa, tiền nhận",        # VI
+    "ma giao dich, ma tham chieu, ma vach, so dien thoai, ma hoa don, tien thua, tien nhan, thira", # VI (no accent + OCR errors)
+    "交易号, 参考号, 条形码, 电话, 授权码, 流水号",                                                        # ZH
+    "取引ID, 参照番号, バーコード, 電話番号, シリアル番号",                                                   # JA
+])
+_qty_prompts = _flatten([
+    "number of items, quantity, item count, total pieces, total units",                             # EN
+    "số lượng, số món, số cái, tổng số lượng",                                                      # VI
+    "so luong, so mon, so cai, tong so luong",                                                      # VI (no accent)
+    "数量, 点数, 個数, 件数",                                                                           # ZH/JA
+    "수량, 개수, 총수량",                                                                              # KO
+])
+_tax_prompts = _flatten([
+    "tax amount, VAT, consumption tax, sales tax, service tax, tax included",                       # EN
+    "tiền thuế, thuế VAT, thuế tiêu thụ đặc biệt, phí dịch vụ",                                   # VI
+    "tien thue, thue vat, thue tieu thu dac biet, phi dich vu",                                     # VI (no accent)
+    "税额, 增值税, 消费税, 税, 含税",                                                                     # ZH
+    "消費税, 内消費税, 税込, 税額, 内税",                                                                 # JA
+    "세금, 부가세, 소비세",                                                                            # KO
+])
+# Store the full matrix of embeddings instead of averaging them!
+# Averaging English, Vietnamese, and Chinese together creates a "Frankenstein" vector
+# that matches none of them perfectly. By keeping them separate, we can use 
+# k-NN (Max Similarity) to match the closest language directly!
+POSITIVE_VECTORS = embedding_model.encode(_pos_prompts)  # Shape: (N_pos, 384)
+NEGATIVE_VECTORS = embedding_model.encode(_neg_prompts)
+QUANTITY_VECTORS = embedding_model.encode(_qty_prompts)
+TAX_VECTORS      = embedding_model.encode(_tax_prompts)
 
 CURRENCY_PATTERN = re.compile(
     r'[\$€£¥₩₹₽₺₴₦฿₫₱¢]|USD|EUR|VND|JPY|GBP|AUD|CAD|SGD',
@@ -257,6 +298,18 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
             if not neighbor:
                 continue  # skip numbers with zero context
 
+            # --- BƯỚC 1: LÀM SẠCH DẤU HIỆU ĐẦU/CUỐI ---
+            # Strip các ký tự không phải chữ hoặc số ở đầu và cuối
+            # Ví dụ: '.竹笙' → '竹笙', '- Total' → 'Total'
+            neighbor = re.sub(r'^[^\w\u00C0-\u024F\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]+', '', neighbor)
+            neighbor = re.sub(r'[^\w\u00C0-\u024F\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]+$', '', neighbor).strip()
+
+            # --- BƯỚC 2: BỘ LỌC CONTEXT CHẤT LƯỢNG ---
+            # Yêu cầu ít nhất 2 ký tự chữ thực sự sau khi đã làm sạch
+            real_letters = re.findall(r'[\w\u00C0-\u024F\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]', neighbor)
+            if len(real_letters) < 2:
+                continue  # context vô nghĩa, bỏ qua
+
             y_center = float(np.mean([p[1] for p in bbox]))
             candidates.append({
                 'value':        value,
@@ -304,19 +357,79 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
                                            'is_max', 'text_length', 'has_currency']])[:, 1]
 
     for i, c in enumerate(candidates):
-        c['xgb_score'] = float(probs[i])
+        raw_score = float(probs[i])
+        # --- ĐIỀU CHỈNH THEO NGỮ NGHĨA (Semantic Reweighting) ---
+        # Nếu NLP không tìm thấy bất kỳ sự liên quan nào đến "Tổng tiền",
+        # giảm điểm XGBoost xuống 50% để ngăn "tên món ăn" hoặc
+        # "số ngẫu nhiên" chiếm Top 1 nhờ vị trí cuối trang.
+        if c['semantic_sim'] < 0.05:
+            c['xgb_score'] = raw_score * 0.5
+        elif c['semantic_sim'] < 0.15:
+            c['xgb_score'] = raw_score * 0.75
+        else:
+            c['xgb_score'] = raw_score
 
     best = max(candidates, key=lambda x: x['xgb_score'])
 
     print("\n🔍 --- BẢNG XẾP HẠNG ỨNG VIÊN TỔNG TIỀN (XGBOOST) ---")
     for c in sorted(candidates, key=lambda x: x['xgb_score'], reverse=True)[:5]:
-        print(f"Value: {c['value']:>10.2f} | Score: {c['xgb_score']*100:>5.1f}% | Context: '{c['neighbor']}'")
+        print(f"Value: {c['value']:>10.2f} | Score: {c['xgb_score']*100:>5.1f}% | Sem: {c['semantic_sim']:.2f} | is_max: {c['is_max']} | y: {c['normalized_y']:.2f} | Context: '{c['neighbor']}'")
 
-    MIN_CONFIDENCE = 0.4
+    # ── Adaptive confidence threshold ────────────────────────────────────
+    # Normal mode: NLP + XGBoost agree → require 40% confidence
+    # Degraded mode: ALL semantic_sim = 0 (OCR corruption / unknown script)
+    #   → trust XGBoost structural features alone with lower bar (25%)
+    all_sem_zero = all(c['semantic_sim'] == 0.0 for c in candidates)
+    MIN_CONFIDENCE = 0.25 if all_sem_zero else 0.4
+    if all_sem_zero:
+        print("⚠️ NLP hoàn toàn thất bại (OCR lỗi / ngôn ngữ chưa hỗ trợ) → dùng structural-only mode (ngưỡng 25%).")
+
     is_confident = best['xgb_score'] >= MIN_CONFIDENCE
+    semantic_override = False
 
-    if not is_confident:
-        print("\n⚠️ XGBoost không đủ tự tin — cần fallback SLM hoặc user validation.")
+    # ── Semantic Override (MiniLM Fast Filter) ───────────────────────────
+    # If NLP is EXTREMELY confident (> 0.55) and it is the max valid value,
+    # bypass XGBoost. XGBoost often penalizes receipts with long survey footers.
+    for c in candidates:
+        if c['semantic_sim'] > 0.55 and c['is_max'] == 1.0:
+            best = c
+            is_confident = True
+            semantic_override = True
+            print(f"\n🚀 TỰ ĐỘNG CHỐT (SEMANTIC OVERRIDE): {best['value']} (Sem: {best['semantic_sim']:.2f} quá cao, bỏ qua XGBoost)")
+            break
+
+    # ── Hybrid NLI Reranker (Trọng tài Logic) ────────────────────────────
+    # If the fast filter didn't override, we call the heavy NLI model to 
+    # inspect the Top 5 candidates from XGBoost.
+    if not semantic_override:
+        print("\n Kích hoạt NLI Reranker trên Top 5 ứng viên...")
+        top_5 = sorted(candidates, key=lambda x: x['xgb_score'], reverse=True)[:5]
+        nli_promoted = None
+        nli_best_score = 0.0
+
+        for c in top_5:
+            # We don't bother asking NLI if there's almost no context
+            if len(c['neighbor'].strip()) < 3:
+                continue
+
+            result = nli_classifier(c['neighbor'], NLI_LABELS)
+            best_label = result['labels'][0]
+            best_prob = result['scores'][0]
+
+            print(f"   - NLI đọc '{c['neighbor']}': {best_label} ({best_prob*100:.1f}%)")
+
+            # Check if NLI believes this is the total amount
+            if best_label == "total amount to pay" and best_prob > 0.50:
+                if best_prob > nli_best_score:
+                    nli_promoted = c
+                    nli_best_score = best_prob
+        
+        if nli_promoted:
+            best = nli_promoted
+            is_confident = True
+            print(f"\n NLI RERANK CHỐT: {best['value']} (NLI Conf: {nli_best_score*100:.1f}%)")
+        elif not is_confident:
+            print("\n XGBoost & NLI đều không tự tin — cần fallback SLM hoặc user validation.")
 
     return {
         'predicted_value': best['value'] if is_confident else None,
@@ -326,15 +439,37 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
 
 
 def _semantic_sim_from_vec(vec, text: str) -> float:
-    """Like _semantic_sim but uses a pre-computed vector (for batch calls)."""
-    if not re.search(r'[a-zA-ZÀ-ỹ]', text):
+    """Compute semantic similarity using a pre-computed vector (for batch calls).
+    Supports Latin, Vietnamese, Chinese, Japanese, Korean scripts.
+    """
+    # Skip if text has no real letters at all (pure numbers/symbols)
+    HAS_LETTERS = re.compile(
+        r'[a-zA-ZÀ-ỹ'              # Latin + Vietnamese
+        r'\u4E00-\u9FFF'            # Chinese (CJK Unified)
+        r'\u3040-\u30FF'            # Japanese (Hiragana + Katakana)
+        r'\uAC00-\uD7AF]'           # Korean (Hangul)
+    )
+    if not HAS_LETTERS.search(text):
         return 0.0
-    pos_sim = float(cosine_similarity([vec], [POSITIVE_VECTOR])[0][0])
-    neg_sim = float(cosine_similarity([vec], [NEGATIVE_VECTOR])[0][0])
-    if pos_sim < 0.25 or neg_sim >= pos_sim:
-        return 0.0
-    penalty = 0.1 if any(w in text.lower() for w in METADATA_BLACKLIST) else 1.0
-    return pos_sim * penalty
+
+    # ── k-NN (Max Similarity) matching ───────────────────────────────────
+    # Instead of comparing to an averaged centroid, compare to ALL language
+    # prompts in the category and pick the MAXIMUM similarity.
+    # This prevents vector dilution and fixes the "unaccented OCR" problem natively.
+    pos_sim = float(np.max(cosine_similarity([vec], POSITIVE_VECTORS)))
+    neg_sim = float(np.max(cosine_similarity([vec], NEGATIVE_VECTORS)))
+    qty_sim = float(np.max(cosine_similarity([vec], QUANTITY_VECTORS)))
+    tax_sim = float(np.max(cosine_similarity([vec], TAX_VECTORS)))
+
+    # ── 4-way semantic gate (no blacklists, works for any language) ──────
+    # Rule: context must be CLOSER to POSITIVE than every other anchor.
+    # If any anchor beats POSITIVE → this number is NOT a total amount.
+    if pos_sim < 0.15:          return 0.0   # too weak overall
+    if neg_sim >= pos_sim:      return 0.0   # closer to IDs/barcodes
+    if qty_sim >= pos_sim:      return 0.0   # closer to item count
+    if tax_sim >= pos_sim:      return 0.0   # closer to tax amount
+
+    return pos_sim
 
 
 # ─────────────────────────────────────────────────────
@@ -369,7 +504,7 @@ def save_feedback(candidates: list, correct_value: float) -> bool:
         })
 
     if not matched:
-        print(f"⚠️ Giá trị {correct_value} không khớp với bất kỳ candidate nào.")
+        print(f"Giá trị {correct_value} không khớp với bất kỳ candidate nào.")
         return False
 
     df_new = pd.DataFrame(rows, columns=FEATURE_COLS)
@@ -454,9 +589,9 @@ def process_invoice(raw_image_path: str) -> dict:
 
     print(f"\n{'='*50}")
     if result['predicted_value']:
-        print(f"💰 KẾT QUẢ CUỐI CÙNG: {result['predicted_value']}")
+        print(f" KẾT QUẢ CUỐI CÙNG: {result['predicted_value']}")
     else:
-        print("⚠️ XGBoost không tự tin — App sẽ gọi SLM để xác nhận.")
+        print(" XGBoost không tự tin — App sẽ gọi SLM để xác nhận.")
     print(f"{'='*50}\n")
 
     return result
@@ -469,11 +604,11 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         img_path = sys.argv[1]
     else:
-        img_path = str(PROJECT_ROOT / "Seg_OCR_Tri" / "input" / "test6.png")
+        img_path = str(PROJECT_ROOT / "Seg_OCR_Tri" / "input" / "test1.jpg")
 
     if not os.path.exists(img_path):
-        print(f"❌ Không tìm thấy file ảnh: {img_path}")
-        print("💡 Dùng: python main.py <đường_dẫn_ảnh>")
+        print(f" Không tìm thấy file ảnh: {img_path}")
+        print(" Dùng: python main.py <đường_dẫn_ảnh>")
         sys.exit(1)
 
     result = process_invoice(img_path)

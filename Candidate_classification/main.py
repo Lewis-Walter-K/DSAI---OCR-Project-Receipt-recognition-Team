@@ -385,51 +385,37 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
         print("⚠️ NLP hoàn toàn thất bại (OCR lỗi / ngôn ngữ chưa hỗ trợ) → dùng structural-only mode (ngưỡng 25%).")
 
     is_confident = best['xgb_score'] >= MIN_CONFIDENCE
-    semantic_override = False
-
-    # ── Semantic Override (MiniLM Fast Filter) ───────────────────────────
-    # If NLP is EXTREMELY confident (> 0.55) and it is the max valid value,
-    # bypass XGBoost. XGBoost often penalizes receipts with long survey footers.
-    for c in candidates:
-        if c['semantic_sim'] > 0.55 and c['is_max'] == 1.0:
-            best = c
-            is_confident = True
-            semantic_override = True
-            print(f"\n🚀 TỰ ĐỘNG CHỐT (SEMANTIC OVERRIDE): {best['value']} (Sem: {best['semantic_sim']:.2f} quá cao, bỏ qua XGBoost)")
-            break
 
     # ── Hybrid NLI Reranker (Trọng tài Logic) ────────────────────────────
-    # If the fast filter didn't override, we call the heavy NLI model to 
-    # inspect the Top 5 candidates from XGBoost.
-    if not semantic_override:
-        print("\n Kích hoạt NLI Reranker trên Top 5 ứng viên...")
-        top_5 = sorted(candidates, key=lambda x: x['xgb_score'], reverse=True)[:5]
-        nli_promoted = None
-        nli_best_score = 0.0
+    # We call the heavy NLI model to inspect the Top 5 candidates from XGBoost.
+    print("\n🧠 Kích hoạt NLI Reranker trên Top 5 ứng viên...")
+    top_5 = sorted(candidates, key=lambda x: x['xgb_score'], reverse=True)[:5]
+    nli_promoted = None
+    nli_best_score = 0.0
 
-        for c in top_5:
-            # We don't bother asking NLI if there's almost no context
-            if len(c['neighbor'].strip()) < 3:
-                continue
+    for c in top_5:
+        # We don't bother asking NLI if there's almost no context
+        if len(c['neighbor'].strip()) < 3:
+            continue
 
-            result = nli_classifier(c['neighbor'], NLI_LABELS)
-            best_label = result['labels'][0]
-            best_prob = result['scores'][0]
+        result = nli_classifier(c['neighbor'], NLI_LABELS)
+        best_label = result['labels'][0]
+        best_prob = result['scores'][0]
 
-            print(f"   - NLI đọc '{c['neighbor']}': {best_label} ({best_prob*100:.1f}%)")
+        print(f"   - NLI đọc '{c['neighbor']}': {best_label} ({best_prob*100:.1f}%)")
 
-            # Check if NLI believes this is the total amount
-            if best_label == "total amount to pay" and best_prob > 0.50:
-                if best_prob > nli_best_score:
-                    nli_promoted = c
-                    nli_best_score = best_prob
-        
-        if nli_promoted:
-            best = nli_promoted
-            is_confident = True
-            print(f"\n NLI RERANK CHỐT: {best['value']} (NLI Conf: {nli_best_score*100:.1f}%)")
-        elif not is_confident:
-            print("\n XGBoost & NLI đều không tự tin — cần fallback SLM hoặc user validation.")
+        # Check if NLI believes this is the total amount
+        if best_label == "total amount to pay" and best_prob > 0.50:
+            if best_prob > nli_best_score:
+                nli_promoted = c
+                nli_best_score = best_prob
+    
+    if nli_promoted:
+        best = nli_promoted
+        is_confident = True
+        print(f"\n🎯 NLI RERANK CHỐT: {best['value']} (NLI Conf: {nli_best_score*100:.1f}%)")
+    elif not is_confident:
+        print("\n⚠️ XGBoost & NLI đều không tự tin — cần fallback SLM hoặc user validation.")
 
     return {
         'predicted_value': best['value'] if is_confident else None,
@@ -604,7 +590,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         img_path = sys.argv[1]
     else:
-        img_path = str(PROJECT_ROOT / "Seg_OCR_Tri" / "input" / "test1.jpg")
+        img_path = str(PROJECT_ROOT / "Seg_OCR_Tri" / "input" / "test11.jpg")
 
     if not os.path.exists(img_path):
         print(f" Không tìm thấy file ảnh: {img_path}")

@@ -22,7 +22,7 @@ from transformers import pipeline
 load_dotenv()
 CURRENT_DIR  = Path(__file__).resolve().parent          # .../Candidate_classification
 PROJECT_ROOT = CURRENT_DIR.parent                       # .../invoice-reader
-SEG_MODELS   = PROJECT_ROOT / "Seg_OCR_Tri" / "models"
+SEG_MODELS   = CURRENT_DIR / "models"
 OUTPUT_DIR   = CURRENT_DIR / "outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -590,7 +590,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         img_path = sys.argv[1]
     else:
-        img_path = str(PROJECT_ROOT / "Seg_OCR_Tri" / "input" / "test1.jpg")
+        img_path = str(CURRENT_DIR / "input" / "test1.jpg")
 
     if not os.path.exists(img_path):
         print(f" Không tìm thấy file ảnh: {img_path}")

@@ -107,7 +107,7 @@ QUANTITY_VECTORS = embedding_model.encode(_qty_prompts)
 TAX_VECTORS      = embedding_model.encode(_tax_prompts)
 
 CURRENCY_PATTERN = re.compile(
-    r'[\$€£¥₩₹₽₺₴₦฿₫₱¢]|USD|EUR|VND|JPY|GBP|AUD|CAD|SGD',
+    r'[\$€£¥₩₹₽₺₴₦฿₫₱¢]|USD|EUR|EURO|VND|JPY|GBP|AUD|CAD|SGD|CHF',
     re.IGNORECASE
 )
 

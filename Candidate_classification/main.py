@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-import matplotlib.pyplot as plt
 import pytesseract
 from ultralytics import YOLO
 from pytesseract import Output
@@ -478,32 +477,3 @@ if __name__ == "__main__":
         sys.exit(1)
 
     result = process_invoice(img_path)
-
-    # Demo: simulate user validation in terminal
-    if result['status'] in ('success', 'low_confidence') and result['candidates']:
-        print("\n--- [DEMO] User Validation ---")
-        predicted = result['predicted_value']
-        if predicted:
-            confirm = input(f"Tổng tiền là {predicted}? (y/n): ").strip().lower()
-        else:
-            confirm = 'n'
-
-        if confirm == 'y':
-            save_feedback(result['candidates'], predicted)
-            print("✅ Đã xác nhận và lưu feedback.")
-        else:
-            correct = input("Nhập số tiền đúng (hoặc 'slm' để gọi AI): ").strip()
-            if correct.lower() == 'slm':
-                print("🤖 Đang gọi SLM (Gemini)...")
-                # Import SLM module dynamically to avoid loading it at startup
-                sys.path.insert(0, str(PROJECT_ROOT / "SLM"))
-                from SML import process_ocr_with_gemini
-                slm_result = process_ocr_with_gemini(result['ocr_text'])
-                correct_value = slm_result.total_amount
-                print(f"🤖 SLM trả về: {correct_value}")
-            else:
-                correct_value = float(correct)
-
-            saved = save_feedback(result['candidates'], correct_value)
-            if not saved:
-                print("⚠️ Giá trị từ SLM không khớp candidate nào — không thể lưu feedback.")

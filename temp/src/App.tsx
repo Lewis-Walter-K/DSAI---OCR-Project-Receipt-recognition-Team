@@ -14,6 +14,7 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('capture');
   const [isEditing, setIsEditing] = useState(false);
   const [pendingBill, setPendingBill] = useState<Partial<Bill> | null>(null);
+  const [candidates, setCandidates] = useState<any[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
   const [settings, setSettings] = useState<UserSettings>({ region: 'VN', base_currency: 'VND' });
   const [loading, setLoading] = useState(false);
@@ -79,25 +80,55 @@ const App: React.FC = () => {
     setLoading(true);
     console.log('Uploading image:', file.name);
     
-    setTimeout(() => {
-      const mockResult: Partial<Bill> = {
-        bill_purpose: 'Groceries',
+    try {
+      const response = await fetch('/api/process-receipt', {
+        method: 'POST',
+        body: file,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to process receipt: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('Process result:', result);
+      
+      setCandidates(result.candidates || []);
+
+      const resultBill: Partial<Bill> = {
+        bill_purpose: 'Scanned Bill',
         bill_date: new Date().toISOString().split('T')[0],
-        original_value: 12.50,
-        original_currency: 'USD',
+        original_value: result.predicted_value || 0,
+        original_currency: result.currency || settings.base_currency,
       };
       
-      setPendingBill(mockResult);
+      setPendingBill(resultBill);
       setIsEditing(true);
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      alert('Failed to process the receipt. Please try again.');
+    } finally {
       setLoading(false);
-    }, 2000);
+    }
   };
 
   const handleConfirmBill = async (finalBill: Bill) => {
     try {
+      if (candidates && candidates.length > 0) {
+        await fetch('/api/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            candidates,
+            correct_value: finalBill.original_value
+          })
+        }).catch(err => console.error("Feedback API error:", err));
+      }
+
       await billService.saveBill(finalBill);
       setIsEditing(false);
       setPendingBill(null);
+      setCandidates([]);
       setCurrentPage('pie');
     } catch (error) {
       console.error('Error saving bill:', error);

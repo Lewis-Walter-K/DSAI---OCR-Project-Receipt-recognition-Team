@@ -326,7 +326,9 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
     vectors      = embedding_model.encode(texts, batch_size=32, show_progress_bar=False)
 
     for cand, vec in zip(candidates, vectors):
-        cand['has_currency'] = 1.0 if CURRENCY_PATTERN.search(cand['neighbor']) else 0.0
+        match = CURRENCY_PATTERN.search(cand['neighbor'])
+        cand['has_currency'] = 1.0 if match else 0.0
+        cand['currency']     = match.group().strip() if match else None
         cand['text_length']  = float(len(cand['neighbor']))
         cand['semantic_sim'] = _semantic_sim_from_vec(vec, cand['neighbor'])
 
@@ -419,6 +421,7 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
 
     return {
         'predicted_value': best['value'] if is_confident else None,
+        'currency':        best.get('currency') if is_confident else None,
         'confidence':      best['xgb_score'],
         'candidates':      candidates,  # full list for feedback matching
     }
@@ -523,6 +526,7 @@ def process_invoice(raw_image_path: str) -> dict:
     """
     result = {
         'predicted_value': None,
+        'currency':        None,
         'confidence':      0.0,
         'candidates':      [],
         'ocr_text':        '',
@@ -569,6 +573,7 @@ def process_invoice(raw_image_path: str) -> dict:
         return result
 
     result['predicted_value'] = xgb_result['predicted_value']
+    result['currency']        = xgb_result.get('currency')
     result['confidence']      = xgb_result['confidence']
     result['candidates']      = xgb_result['candidates']
     result['status']          = 'success' if xgb_result['predicted_value'] else 'low_confidence'
@@ -602,14 +607,35 @@ def process_invoice(raw_image_path: str) -> dict:
 #  ENTRY POINT  (for terminal testing)
 # ─────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        img_path = sys.argv[1]
-    else:
-        img_path = str(CURRENT_DIR / "input" / "test1.jpg")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("image_or_cmd", nargs='?', default=str(CURRENT_DIR / "input" / "test1.jpg"))
+    parser.add_argument("--feedback", action="store_true", help="Submit feedback")
+    parser.add_argument("--candidates", type=str, help="JSON string of candidates")
+    parser.add_argument("--correct_value", type=float, help="Correct value for feedback")
+    args = parser.parse_args()
 
+    if args.feedback:
+        if args.candidates and args.correct_value is not None:
+            candidates = json.loads(args.candidates)
+            save_feedback(candidates, args.correct_value)
+            print("===RESULT_JSON_START===")
+            print(json.dumps({"status": "success"}))
+            print("===RESULT_JSON_END===")
+        else:
+            print("===RESULT_JSON_START===")
+            print(json.dumps({"status": "error", "message": "Missing candidates or correct_value"}))
+            print("===RESULT_JSON_END===")
+        sys.exit(0)
+
+    img_path = args.image_or_cmd
     if not os.path.exists(img_path):
-        print(f" Không tìm thấy file ảnh: {img_path}")
-        print(" Dùng: python main.py <đường_dẫn_ảnh>")
+        print("===RESULT_JSON_START===")
+        print(json.dumps({"status": "error", "message": f"File not found: {img_path}"}))
+        print("===RESULT_JSON_END===")
         sys.exit(1)
 
     result = process_invoice(img_path)
+    print("===RESULT_JSON_START===")
+    print(json.dumps(result))
+    print("===RESULT_JSON_END===")

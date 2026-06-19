@@ -652,7 +652,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         img_path = sys.argv[1]
     else:
-        img_path = str(CURRENT_DIR / "input" / "test6.png")
+        img_path = str(CURRENT_DIR / "input" / "test1.jpg")
 
     if not os.path.exists(img_path):
         print(f" Không tìm thấy file ảnh: {img_path}")

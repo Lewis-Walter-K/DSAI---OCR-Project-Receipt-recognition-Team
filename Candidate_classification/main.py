@@ -69,8 +69,8 @@ def _flatten(prompts):
 
 _pos_prompts = _flatten([
     "order total, grand total, total amount to pay, amount due, balance due, net total, total-eft",  # EN
-    "tổng cộng, tổng tiền, thành tiền, thanh toán, số tiền thanh toán",                             # VI
-    "tong cong, tong tien, thanh tien, thanh toan, so tien thanh toan",                             # VI (no accent)
+    "tổng cộng, tổng tiền, thành tiền, thanh toán, số tiền thanh toán, tổng tier, thành tier, Tổng tiền hàng",                             # VI
+    "tong cong, tong tien, thanh tien, thanh toan, so tien thanh toan, tong tier, thanh tier, Tong tien hang",      # VI (no accent)
     "消费合计, 合计, 总计, 实付金额, 应付金额, 收款金额, 结账金额",                                          # ZH
     "合計, お会計, 請求金額, 支払合計, お支払い金額",                                                      # JA
     "합계, 총액, 결제금액, 청구금액, 지불합계",                                                          # KO
@@ -264,16 +264,38 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
             if value is None:
                 continue
 
-            # Build neighbor context
+            # --- ĐOẠN CODE MỚI ---
             left  = text_clean[max(0, s_idx - 25):s_idx]
             right = text_clean[e_idx:e_idx + 15]
+            prev_line = ''
 
-            # Look-back: if no letters/numbers on the left, peek at the previous line
-            if not re.search(r'[a-zA-Z\d]', left) and idx > 0:
-                prev_text = ocr_results[idx - 1][1]
-                prev_line = prev_text[-25:] if not re.search(r'\d', prev_text) else ''
-            else:
-                prev_line = ''
+            # Nếu xung quanh con số không có chữ nào
+            if not re.search(r'[a-zA-Z\u00C0-\u024F\u4E00-\u9FFF]', left):
+                y_center_current = float(np.mean([p[1] for p in bbox]))
+                same_line_texts = []
+                
+                for other_bbox, other_text in ocr_results:
+                    if other_text == text: 
+                        continue
+                    
+                    other_y_center = float(np.mean([p[1] for p in other_bbox]))
+                    
+                    # NỚI LỎNG: Cho phép box lệch nhau tới 45 pixels (để bù trừ lỗi nghiêng)
+                    if abs(other_y_center - y_center_current) < 45:
+                        clean_text = re.sub(r'\d+', '', other_text).strip()
+                        if len(clean_text) > 2: # Bỏ qua các ký tự rác quá ngắn
+                            same_line_texts.append(clean_text)
+                
+                if same_line_texts:
+                    prev_line = " ".join(same_line_texts)[-40:]
+                else:
+                    # LƯỚI BỌC HẬU TỐI THƯỢNG: Nếu trục Y thất bại, gom luôn 3 dòng liền trước nó
+                    fallback_texts = []
+                    for i in range(max(0, idx - 3), idx):
+                        clean_fallback = re.sub(r'\d+', '', ocr_results[i][1]).strip()
+                        if len(clean_fallback) > 2:
+                            fallback_texts.append(clean_fallback)
+                    prev_line = " ".join(fallback_texts)[-40:]
 
             neighbor = f"{prev_line} {left} {right}".strip()
             if not neighbor:
@@ -335,18 +357,39 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
             'has_currency':  c['has_currency'],
         })
 
+    print("\n🐛 [DEBUG] TẤT CẢ CÁC SỐ ĐÃ TRÍCH XUẤT ĐƯỢC (TRƯỚC KHI VÀO XGBOOST):")
+    for c in candidates:
+        print(f"   - Số: {c['value']:>10} | Sem: {c['semantic_sim']:.2f} | is_max: {c['is_max']} | Ngữ cảnh: '{c['neighbor']}'")
+
     df      = pd.DataFrame(rows)
     probs   = xgb_model.predict_proba(df[['semantic_sim', 'normalized_y',
                                            'is_max', 'text_length', 'has_currency']])[:, 1]
-
+    
     for i, c in enumerate(candidates):
         raw_score = float(probs[i])
         # --- ĐIỀU CHỈNH THEO NGỮ NGHĨA (Semantic Reweighting) ---
-        # Tăng ảnh hưởng của semantic_sim để vượt qua các sai lệch điểm số XGBoost nhỏ
+        # Nếu NLP không tìm thấy bất kỳ sự liên quan nào đến "Tổng tiền",
+        # giảm điểm XGBoost xuống 50% để ngăn "tên món ăn" hoặc
+        # "số ngẫu nhiên" chiếm Top 1 nhờ vị trí cuối trang.
+        # if c['semantic_sim'] < 0.05:
+        #     c['xgb_score'] = raw_score * 0.5
+        # elif c['semantic_sim'] < 0.15:
+        #     c['xgb_score'] = raw_score * 0.75
+        # else:
+        #     c['xgb_score'] = raw_score
+
+        # --- ĐIỀU CHỈNH THEO NGỮ NGHĨA (Semantic Reweighting) ---
         if c['semantic_sim'] < 0.05:
             c['xgb_score'] = raw_score * 0.1
         elif c['semantic_sim'] < 0.15:
-            c['xgb_score'] = raw_score * 0.5
+            c['xgb_score'] = raw_score * 0.75
+        elif c['semantic_sim'] >= 0.7:
+            # 🚀 QUYỀN PHỦ QUYẾT: Ngữ nghĩa quá rõ ràng -> Ép điểm XGBoost lên 95%
+            # Để đảm bảo nó CHẮC CHẮN lọt vào Top 5 cho NLI đọc
+            c['xgb_score'] = max(raw_score, 0.95)
+        elif c['semantic_sim'] >= 0.5:
+            # Khuyến khích nhẹ nếu ngữ nghĩa khá ổn
+            c['xgb_score'] = max(raw_score, 0.80)
         else:
             c['xgb_score'] = raw_score * (0.5 + c['semantic_sim'])
 
@@ -367,10 +410,15 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
 
     is_confident = best['xgb_score'] >= MIN_CONFIDENCE
 
-    # ── Hybrid NLI Reranker (Trọng tài Logic) ────────────────────────────
-    # We call the heavy NLI model to inspect the Top 5 candidates from XGBoost.
-    print("\n🧠 Kích hoạt NLI Reranker trên Top 5 ứng viên...")
-    top_5 = sorted(candidates, key=lambda x: x['xgb_score'], reverse=True)[:5]
+    # ── Hybrid NLI Reranker (Sem > NLI > XGBoost) ────────────────────────────
+    # We call the heavy NLI model to inspect the Top 5 candidates based primarily on Semantic Similarity
+    print("\n🧠 Kích hoạt NLI Reranker theo thứ tự: Sem > NLI > XGBoost...")
+    
+    if all_sem_zero:
+        top_5 = sorted(candidates, key=lambda x: x['xgb_score'], reverse=True)[:5]
+    else:
+        top_5 = sorted(candidates, key=lambda x: (x['semantic_sim'], x['xgb_score']), reverse=True)[:5]
+
     nli_promoted = None
     nli_best_score = 0.0
 
@@ -383,10 +431,11 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
         best_label = result['labels'][0]
         best_prob = result['scores'][0]
 
-        print(f"   - NLI đọc '{c['neighbor']}': {best_label} ({best_prob*100:.1f}%)")
+        print(f"   - NLI đọc '{c['neighbor']}' [Sem: {c['semantic_sim']:.2f}]: {best_label} ({best_prob*100:.1f}%)")
 
-        # Check if NLI believes this is the total amount
-        if best_label == "total amount to pay" and best_prob > 0.50:
+        # Check if NLI believes this is the total amount. 
+        # Lowered threshold to 40% to account for unaccented Vietnamese (e.g. 'Tong tien')
+        if best_label == "total amount to pay" and best_prob >= 0.40:
             if best_prob > nli_best_score:
                 nli_promoted = c
                 nli_best_score = best_prob
@@ -394,7 +443,7 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
     if nli_promoted:
         best = nli_promoted
         is_confident = True
-        print(f"\n🎯 NLI RERANK CHỐT: {best['value']} (NLI Conf: {nli_best_score*100:.1f}%)")
+        print(f"\n🎯 NLI RERANK CHỐT: {best['value']} (NLI Conf: {nli_best_score*100:.1f}%, Sem: {best['semantic_sim']:.2f})")
     elif not is_confident:
         print("\n⚠️ XGBoost & NLI đều không tự tin — cần fallback SLM hoặc user validation.")
 

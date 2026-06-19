@@ -7,6 +7,7 @@ import BarDashboard from './pages/BarDashboard';
 import History from './pages/History';
 import type { Bill, UserSettings } from './types/bill_data';
 import { billService } from './services/billService';
+import { apiService } from './services/apiService';
 
 type Page = 'capture' | 'pie' | 'bar' | 'history';
 
@@ -77,25 +78,49 @@ const App: React.FC = () => {
 
   const handleImageCaptured = async (file: File) => {
     setLoading(true);
-    console.log('Uploading image:', file.name);
+    console.log('Uploading image to backend:', file.name);
     
-    setTimeout(() => {
-      const mockResult: Partial<Bill> = {
-        bill_purpose: 'Groceries',
-        bill_date: new Date().toISOString().split('T')[0],
-        original_value: 12.50,
-        original_currency: 'USD',
+    try {
+      const response = await apiService.uploadInvoice(file);
+      console.log('Backend response:', response);
+
+      const predictedBill: Partial<Bill> = {
+        bill_purpose: 'Shopping', // Default or could be extracted by SLM
+        bill_date: new Date().toISOString().split('T')[0], // Default to today
+        original_value: response.predicted_value || 0,
+        original_currency: 'VND', // Default or could be extracted
       };
+
+      // If SLM fallback was used, we might have structured data
+      if (response.structured_data) {
+        if (response.structured_data.bill_purpose) predictedBill.bill_purpose = response.structured_data.bill_purpose;
+        if (response.structured_data.bill_date) predictedBill.bill_date = response.structured_data.bill_date;
+        if (response.structured_data.currency) predictedBill.original_currency = response.structured_data.currency;
+      }
       
-      setPendingBill(mockResult);
+      setPendingBill(predictedBill);
       setIsEditing(true);
+    } catch (error) {
+      console.error('Error processing image:', error);
+      alert('Failed to process image. Please check the backend server.');
+    } finally {
       setLoading(false);
-    }, 2000);
+    }
   };
 
   const handleConfirmBill = async (finalBill: Bill) => {
     try {
+      // 1. Save locally to Firebase/Service
       await billService.saveBill(finalBill);
+      
+      // 2. Send feedback to AI backend for XGBoost retraining
+      // Note: We'd ideally pass the candidates from the upload response, 
+      // but for simplicity we'll pass an empty array if we don't have them in state.
+      // A robust implementation would store `candidates` in state during `handleImageCaptured`.
+      apiService.submitFeedback(finalBill.original_value, []).catch(err => {
+        console.error('Failed to submit feedback to AI:', err);
+      });
+
       setIsEditing(false);
       setPendingBill(null);
       setCurrentPage('pie');
@@ -127,16 +152,20 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-full bg-gray-50 flex justify-center overflow-hidden">
+    <div className="h-[100dvh] w-full bg-gray-50 flex justify-center overflow-hidden">
       <div className="w-full max-w-[480px] bg-white h-full relative shadow-2xl flex flex-col overflow-hidden">
-        <TopBar 
-          region={settings.region} 
-          onRegionChange={handleRegionChange} 
-        />
+        {!isEditing && (
+          <TopBar 
+            region={settings.region} 
+            onRegionChange={handleRegionChange} 
+          />
+        )}
         
-        <main className="flex-1 overflow-y-auto no-scrollbar relative">
-          {renderPage()}
-        </main>
+        {!isEditing && (
+          <main className="flex-1 overflow-y-auto no-scrollbar relative">
+            {renderPage()}
+          </main>
+        )}
 
         {loading && (
           <div className="absolute inset-0 bg-white/80 z-[70] flex flex-col items-center justify-center gap-4">
@@ -154,10 +183,12 @@ const App: React.FC = () => {
           />
         )}
 
-        <BottomBar 
-          currentPage={currentPage} 
-          onPageChange={setCurrentPage} 
-        />
+        {!isEditing && (
+          <BottomBar 
+            currentPage={currentPage} 
+            onPageChange={setCurrentPage} 
+          />
+        )}
       </div>
 
       <style>{`

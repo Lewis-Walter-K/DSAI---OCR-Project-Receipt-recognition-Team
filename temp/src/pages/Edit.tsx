@@ -41,7 +41,7 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
   };
 
   return (
-    <div className="absolute inset-0 bg-slate-50 z-[60] flex flex-col animate-slide-up">
+    <div className="flex-1 w-full bg-slate-50 flex flex-col animate-slide-up">
       {/* Header */}
       <div className="bg-white px-6 pt-8 pb-4 rounded-b-[32px] shadow-sm relative z-10 flex items-center justify-between">
         <button onClick={onCancel} className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors">
@@ -51,7 +51,7 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
         <div className="w-10"></div> {/* Spacer for centering */}
       </div>
 
-      <div className="flex-1 overflow-y-auto no-scrollbar px-6 pt-6 pb-32">
+      <div className="flex-1 overflow-y-auto no-scrollbar px-6 pt-6 pb-6">
         {/* Modern Receipt Card */}
         <div className="bg-white rounded-[24px] p-6 shadow-sm border border-slate-100 mb-6">
           <div className="flex items-center gap-3 mb-6 pb-6 border-b border-slate-100">
@@ -134,16 +134,17 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
         )}
       </div>
 
-      {/* Sticky Bottom Action Bar */}
-      <div className="absolute bottom-0 left-0 right-0 p-6 bg-white border-t border-slate-100 shadow-[0_-10px_30px_rgb(0,0,0,0.03)] z-20">
+      {/* Static Bottom Action Bar (Flexbox instead of absolute) */}
+      <div className="w-full p-6 bg-white border-t border-slate-100 shadow-[0_-10px_30px_rgb(0,0,0,0.03)] shrink-0 z-20">
         <div className="flex items-center justify-between mb-4 px-2">
           <span className="text-sm font-bold text-slate-400 uppercase tracking-wider">Final Total</span>
           <span className="text-3xl font-black text-blue-600">{formData.total_bill_value?.toLocaleString()} <span className="text-sm font-bold text-slate-400">{userSettings.base_currency}</span></span>
         </div>
         <button 
+          color='#b71313'
           form="bill-form"
           type="submit"
-          className="w-full bg-blue-600 text-white py-4 rounded-full font-bold shadow-[0_8px_20px_rgb(37,99,235,0.25)] active:scale-[0.98] transition-all flex items-center justify-center gap-2 hover:bg-blue-700"
+          className="w-full bg-blue-600 text-white py-4 rounded-full font-bold shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 hover:bg-blue-700 mt-4"
         >
           <Check size={22} strokeWidth={3} />
           Confirm & Save Bill

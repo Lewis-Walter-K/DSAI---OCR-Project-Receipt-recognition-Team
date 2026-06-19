@@ -28,3 +28,8 @@ python-dotenv==1.2.2
 # SLM & GenAI API
 google-generativeai==0.8.3
 pydantic==2.13.4
+
+# API Server
+fastapi==0.115.6
+uvicorn==0.34.0
+python-multipart==0.0.20

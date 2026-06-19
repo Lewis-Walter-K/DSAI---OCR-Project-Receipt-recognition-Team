@@ -8,6 +8,7 @@ import History from './pages/History';
 import type { Bill, UserSettings } from './types/bill_data';
 import { billService } from './services/billService';
 import { apiService } from './services/apiService';
+import type { UploadResponse } from './services/apiService';
 
 type Page = 'capture' | 'pie' | 'bar' | 'history';
 
@@ -19,6 +20,10 @@ const App: React.FC = () => {
   const [bills, setBills] = useState<Bill[]>([]);
   const [settings, setSettings] = useState<UserSettings>({ region: 'VN', base_currency: 'VND' });
   const [loading, setLoading] = useState(false);
+  // Track the raw captured file so Edit page can re-call LLM if needed
+  const [capturedFile, setCapturedFile] = useState<File | null>(null);
+  // "success" | "llm_fallback" | "low_confidence" — drives the banner in Edit page
+  const [apiStatus, setApiStatus] = useState<string>('success');
 
   useEffect(() => {
     const mockBills: Bill[] = [
@@ -77,86 +82,60 @@ const App: React.FC = () => {
     };
   }, []);
 
+  /** Helper: map an UploadResponse to a Partial<Bill> */
+  const mapResponseToBill = (response: UploadResponse): Partial<Bill> => {
+    const bill: Partial<Bill> = {
+      bill_purpose: 'Shopping',
+      bill_date: new Date().toISOString().split('T')[0],
+      original_value: response.predicted_value || 0,
+      original_currency: response.currency || settings.base_currency,
+    };
+    if (response.structured_data) {
+      if (response.structured_data.bill_purpose) bill.bill_purpose = response.structured_data.bill_purpose;
+      if (response.structured_data.bill_date) bill.bill_date = response.structured_data.bill_date;
+      if (response.structured_data.currency) bill.original_currency = response.structured_data.currency;
+      if (response.structured_data.total_amount) bill.original_value = response.structured_data.total_amount;
+    }
+    return bill;
+  };
+
   const handleImageCaptured = async (file: File) => {
     setLoading(true);
+    setCapturedFile(file); // Store for potential LLM re-call in Edit page
     console.log('Uploading image to backend:', file.name);
-    
-    try {
-      const response = await fetch('/api/process-receipt', {
-        method: 'POST',
-        body: file,
-      });
 
-      if (!response.ok) {
-        throw new Error(`Failed to process receipt: ${response.statusText}`);
-      }
-
-      const result = await response.json();
-      console.log('Process result:', result);
-      
-      setCandidates(result.candidates || []);
-
-      const resultBill: Partial<Bill> = {
-        bill_purpose: 'Scanned Bill',
-        bill_date: new Date().toISOString().split('T')[0],
-        original_value: result.predicted_value || 0,
-        original_currency: result.currency || settings.base_currency,
     try {
       const response = await apiService.uploadInvoice(file);
       console.log('Backend response:', response);
 
-      const predictedBill: Partial<Bill> = {
-        bill_purpose: 'Shopping', // Default or could be extracted by SLM
-        bill_date: new Date().toISOString().split('T')[0], // Default to today
-        original_value: response.predicted_value || 0,
-        original_currency: 'VND', // Default or could be extracted
-      };
-      
-      setPendingBill(resultBill);
-
-      // If SLM fallback was used, we might have structured data
-      if (response.structured_data) {
-        if (response.structured_data.bill_purpose) predictedBill.bill_purpose = response.structured_data.bill_purpose;
-        if (response.structured_data.bill_date) predictedBill.bill_date = response.structured_data.bill_date;
-        if (response.structured_data.currency) predictedBill.original_currency = response.structured_data.currency;
-      }
-      
-      setPendingBill(predictedBill);
+      setCandidates(response.candidates || []);
+      setApiStatus(response.status || 'success');
+      setPendingBill(mapResponseToBill(response));
       setIsEditing(true);
-    } catch (error) {
-      console.error('Error uploading image:', error);
-      alert('Failed to process the receipt. Please try again.');
-    } finally {
     } catch (error) {
       console.error('Error processing image:', error);
       alert('Failed to process image. Please check the backend server.');
     } finally {
       setLoading(false);
     }
-    }
+  };
+
+  /** Called from Edit page when user manually triggers LLM re-parse */
+  const handleLlmFallback = async (): Promise<void> => {
+    if (!capturedFile) return;
+    const response = await apiService.callLlmFallback(capturedFile);
+    setCandidates(response.candidates || []);
+    setApiStatus(response.status || 'llm_fallback');
+    setPendingBill(prev => ({ ...prev, ...mapResponseToBill(response) }));
   };
 
   const handleConfirmBill = async (finalBill: Bill) => {
     try {
-      if (candidates && candidates.length > 0) {
-        await fetch('/api/feedback', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            candidates,
-            correct_value: finalBill.original_value
-          })
-        }).catch(err => console.error("Feedback API error:", err));
-      }
-
       // 1. Save locally to Firebase/Service
       await billService.saveBill(finalBill);
       
       // 2. Send feedback to AI backend for XGBoost retraining
-      // Note: We'd ideally pass the candidates from the upload response, 
-      // but for simplicity we'll pass an empty array if we don't have them in state.
-      // A robust implementation would store `candidates` in state during `handleImageCaptured`.
-      apiService.submitFeedback(finalBill.original_value, []).catch(err => {
+      apiService.submitFeedback(finalBill.original_value, candidates).catch(err => {
         console.error('Failed to submit feedback to AI:', err);
       });
 
@@ -193,7 +172,6 @@ const App: React.FC = () => {
 
   return (
     <div className="h-[100dvh] w-full bg-gray-50 flex justify-center overflow-hidden">
-    <div className="h-[100dvh] w-full bg-gray-50 flex justify-center overflow-hidden">
       <div className="w-full max-w-[480px] bg-white h-full relative shadow-2xl flex flex-col overflow-hidden">
         {!isEditing && (
           <TopBar 
@@ -221,6 +199,8 @@ const App: React.FC = () => {
             userSettings={settings}
             onConfirm={handleConfirmBill}
             onCancel={() => setIsEditing(false)}
+            apiStatus={apiStatus}
+            onLlmFallback={handleLlmFallback}
           />
         )}
 

@@ -1,16 +1,27 @@
 const API_BASE_URL = 'http://localhost:8000/api';
 
+export interface UploadResponse {
+  predicted_value: number | null;
+  confidence: number;
+  candidates: any[];
+  // "success" | "llm_fallback" | "low_confidence"
+  status: string;
+  currency?: string;
+  structured_data?: {
+    bill_purpose?: string;
+    bill_date?: string;
+    currency?: string;
+    total_amount?: number;
+  };
+}
+
 export const apiService = {
   /**
-   * Upload an invoice image to the backend for processing
+   * Upload an invoice image to the backend for processing.
+   * Returns status "success" when XGBoost is confident,
+   * or "llm_fallback" / "low_confidence" when it fails.
    */
-  async uploadInvoice(file: File): Promise<{
-    predicted_value: number | null;
-    confidence: number;
-    candidates: any[];
-    status: string;
-    structured_data?: any;
-  }> {
+  async uploadInvoice(file: File): Promise<UploadResponse> {
     const formData = new FormData();
     formData.append('file', file);
 
@@ -27,7 +38,27 @@ export const apiService = {
   },
 
   /**
-   * Submit feedback to the backend for XGBoost retraining
+   * Call the LLM (Gemini) directly to re-parse the receipt image.
+   * Used as a human-triggered fallback when XGBoost result is unreliable.
+   */
+  async callLlmFallback(file: File): Promise<UploadResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE_URL}/llm-parse`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`LLM Fallback Error: ${response.statusText}`);
+    }
+
+    return response.json();
+  },
+
+  /**
+   * Submit feedback to the backend for XGBoost retraining.
    */
   async submitFeedback(correctValue: number, candidates: any[]): Promise<void> {
     const response = await fetch(`${API_BASE_URL}/feedback`, {

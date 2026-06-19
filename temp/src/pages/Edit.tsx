@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Check, AlertCircle, ChevronLeft, ReceiptText } from 'lucide-react';
+import { Check, AlertCircle, ChevronLeft, ReceiptText, Sparkles, Loader2 } from 'lucide-react';
 import type { Bill, UserSettings } from '../types/bill_data';
 
 interface EditProps {
@@ -7,6 +7,10 @@ interface EditProps {
   userSettings: UserSettings;
   onConfirm: (finalData: Bill) => void;
   onCancel: () => void;
+  /** "success" | "low_confidence" | "llm_fallback" from backend */
+  apiStatus: string;
+  /** Trigger LLM re-parse from parent */
+  onLlmFallback: () => Promise<void>;
 }
 
 const EXCHANGE_RATES: Record<string, number> = {
@@ -24,8 +28,9 @@ const EXCHANGE_RATES: Record<string, number> = {
   VND: 1
 };
 
-const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCancel }) => {
+const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCancel, apiStatus, onLlmFallback }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLlmLoading, setIsLlmLoading] = useState(false);
   const [formData, setFormData] = useState<Partial<Bill>>({
     bill_purpose: initialData.bill_purpose || '',
     bill_date: initialData.bill_date || new Date().toISOString().split('T')[0],
@@ -64,6 +69,18 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
     }
   };
 
+  const handleAskLlm = async () => {
+    setIsLlmLoading(true);
+    try {
+      await onLlmFallback();
+    } catch (err) {
+      console.error('LLM fallback failed:', err);
+      alert('AI re-parse failed. Please fill in manually.');
+    } finally {
+      setIsLlmLoading(false);
+    }
+  };
+
   return (
     <div className="flex-1 w-full bg-slate-50 flex flex-col animate-slide-up">
       {/* Header */}
@@ -75,19 +92,115 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
         <div className="w-10"></div> {/* Spacer for centering */}
       </div>
 
-      <div className="flex-1 overflow-y-auto no-scrollbar px-6 pt-6 pb-6">
+      {/* Human Validation Banner — shown when XGBoost confidence is low */}
+      {(apiStatus === 'low_confidence' || apiStatus === 'llm_fallback') && (
+        <div style={{
+          margin: '12px 16px 0',
+          padding: '14px 16px',
+          background: '#fffbeb',
+          border: '1px solid #fcd34d',
+          borderRadius: '16px',
+          display: 'flex',
+          gap: '12px',
+          alignItems: 'flex-start'
+        }}>
+          <AlertCircle size={20} style={{ color: '#d97706', flexShrink: 0, marginTop: 2 }} />
+          <div style={{ flex: 1 }}>
+            <p style={{ fontWeight: 700, fontSize: 13, color: '#92400e', marginBottom: 4 }}>
+              {apiStatus === 'llm_fallback'
+                ? '⚠️ AI Model was unsure — values filled by LLM. Please verify!'
+                : '⚠️ Low confidence result — please verify the values below.'}
+            </p>
+            <p style={{ fontSize: 12, color: '#b45309', marginBottom: 10, lineHeight: 1.5 }}>
+              The XGBoost model could not read this bill with high confidence.
+              You can ask Gemini AI to re-parse the image, or fill in manually.
+            </p>
+            <button
+              type="button"
+              onClick={handleAskLlm}
+              disabled={isLlmLoading}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                background: isLlmLoading ? '#d1d5db' : '#7c3aed',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '999px',
+                padding: '8px 16px',
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: isLlmLoading ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {isLlmLoading
+                ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                : <Sparkles size={14} />}
+              {isLlmLoading ? 'Asking Gemini AI...' : 'Ask AI (Gemini)'}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto no-scrollbar px-6 pt-6 pb-6">
         {/* Modern Receipt Card */}
         <div className="bg-white rounded-[24px] p-6 shadow-sm border border-slate-100 mb-6">
-          <div className="flex items-center gap-3 mb-6 pb-6 border-b border-slate-100">
-            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center">
-              <ReceiptText size={24} />
+
+          {/* Header: Scanned amount + always-visible Re-parse button */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, paddingBottom: 20, borderBottom: '1px solid #f1f5f9' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 48, height: 48, background: '#eff6ff', color: '#2563eb', borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <ReceiptText size={24} />
+              </div>
+              <div>
+                <p style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>Scanned Amount</p>
+                <p style={{ fontSize: 22, fontWeight: 900, color: '#1e293b' }}>
+                  {formData.original_value?.toLocaleString()}{' '}
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8' }}>{formData.original_currency}</span>
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-bold text-slate-400 uppercase tracking-wider">Scanned Amount</p>
-              <p className="text-2xl font-black text-slate-800">{formData.original_value?.toLocaleString()} <span className="text-sm font-bold text-slate-400">{formData.original_currency}</span></p>
-            </div>
+
+            {/* Always-visible Re-parse button */}
+            <button
+              type="button"
+              onClick={handleAskLlm}
+              disabled={isLlmLoading}
+              title="Ask Gemini AI to re-read this receipt"
+              style={{
+                display: 'inline-flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 3,
+                background: isLlmLoading ? '#f3f4f6' : '#faf5ff',
+                color: isLlmLoading ? '#9ca3af' : '#7c3aed',
+                border: `1.5px solid ${isLlmLoading ? '#e5e7eb' : '#ddd6fe'}`,
+                borderRadius: 14,
+                padding: '8px 10px',
+                fontSize: 10,
+                fontWeight: 700,
+                cursor: isLlmLoading ? 'not-allowed' : 'pointer',
+                minWidth: 62,
+              }}
+            >
+              {isLlmLoading
+                ? <Loader2 size={18} style={{ animation: 'spin 1s linear infinite' }} />
+                : <Sparkles size={18} />}
+              {isLlmLoading ? 'Asking...' : 'Ask AI'}
+            </button>
           </div>
+
+          {/* Low-confidence warning strip (only shown when AI was unsure) */}
+          {(apiStatus === 'low_confidence' || apiStatus === 'llm_fallback') && (
+            <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 12, padding: '10px 14px', marginBottom: 16, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <AlertCircle size={16} style={{ color: '#d97706', flexShrink: 0, marginTop: 1 }} />
+              <p style={{ fontSize: 12, fontWeight: 600, color: '#92400e', lineHeight: 1.5 }}>
+                {apiStatus === 'llm_fallback'
+                  ? '⚠️ Filled by Gemini AI — values may not be exact. Please verify!'
+                  : '⚠️ Low confidence — AI was unsure. Please verify the values below.'}
+              </p>
+            </div>
+          )}
 
           <form id="bill-form" onSubmit={handleSubmit} className="space-y-5">
             {/* Input Group: Purpose */}

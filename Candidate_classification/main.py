@@ -107,7 +107,7 @@ QUANTITY_VECTORS = embedding_model.encode(_qty_prompts)
 TAX_VECTORS      = embedding_model.encode(_tax_prompts)
 
 CURRENCY_PATTERN = re.compile(
-    r'[\$€£¥₩₹₽₺₴₦฿₫₱¢]|USD|EUR|VND|JPY|GBP|AUD|CAD|SGD',
+    r'[\$€£¥₩₹₽₺₴₦฿₫₱¢]|USD|EUR|EURO|VND|JPY|GBP|AUD|CAD|SGD|CHF',
     re.IGNORECASE
 )
 
@@ -190,26 +190,7 @@ def img_scanner(img_path: str) -> str | None:
     flat = _flatten_receipt(cropped, pts)
 
     # --- Rotate (Tesseract OSD) ---
-    pytesseract.pytesseract.tesseract_cmd = (
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    )
-    try:
-        osd        = pytesseract.image_to_osd(flat, output_type=Output.DICT)
-        angle      = osd["rotate"]
-        confidence = osd["orientation_conf"]
-        print(f"🔍 OSD dự đoán {angle}° | confidence: {confidence:.2f}")
-        if confidence >= 4.0:
-            ROTATE_MAP = {
-                90:  cv2.ROTATE_90_CLOCKWISE,
-                180: cv2.ROTATE_180,
-                270: cv2.ROTATE_90_COUNTERCLOCKWISE,
-            }
-            if angle in ROTATE_MAP and angle not in [90, 270]:  # guard portrait
-                flat = cv2.rotate(flat, ROTATE_MAP[angle])
-        else:
-            print("⚠️ OSD confidence quá thấp, bỏ qua xoay.")
-    except Exception as e:
-        print(f"⚠️ Lỗi OSD: {e}")
+    # Removed Tesseract OSD in favor of PaddleOCR's built-in angle classifier.
 
     # --- Adaptive threshold (CamScanner-style) ---
     gray     = cv2.cvtColor(flat, cv2.COLOR_BGR2GRAY)
@@ -348,7 +329,9 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
     vectors      = embedding_model.encode(texts, batch_size=32, show_progress_bar=False)
 
     for cand, vec in zip(candidates, vectors):
-        cand['has_currency'] = 1.0 if CURRENCY_PATTERN.search(cand['neighbor']) else 0.0
+        match = CURRENCY_PATTERN.search(cand['neighbor'])
+        cand['has_currency'] = 1.0 if match else 0.0
+        cand['currency']     = match.group().strip() if match else None
         cand['text_length']  = float(len(cand['neighbor']))
         cand['semantic_sim'] = _semantic_sim_from_vec(vec, cand['neighbor'])
 
@@ -397,7 +380,7 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
 
         # --- ĐIỀU CHỈNH THEO NGỮ NGHĨA (Semantic Reweighting) ---
         if c['semantic_sim'] < 0.05:
-            c['xgb_score'] = raw_score * 0.5
+            c['xgb_score'] = raw_score * 0.1
         elif c['semantic_sim'] < 0.15:
             c['xgb_score'] = raw_score * 0.75
         elif c['semantic_sim'] >= 0.7:
@@ -408,7 +391,7 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
             # Khuyến khích nhẹ nếu ngữ nghĩa khá ổn
             c['xgb_score'] = max(raw_score, 0.80)
         else:
-            c['xgb_score'] = raw_score
+            c['xgb_score'] = raw_score * (0.5 + c['semantic_sim'])
 
     best = max(candidates, key=lambda x: x['xgb_score'])
 
@@ -466,6 +449,7 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
 
     return {
         'predicted_value': best['value'] if is_confident else None,
+        'currency':        best.get('currency') if is_confident else None,
         'confidence':      best['xgb_score'],
         'candidates':      candidates,  # full list for feedback matching
     }
@@ -570,6 +554,7 @@ def process_invoice(raw_image_path: str) -> dict:
     """
     result = {
         'predicted_value': None,
+        'currency':        None,
         'confidence':      0.0,
         'candidates':      [],
         'ocr_text':        '',
@@ -616,6 +601,7 @@ def process_invoice(raw_image_path: str) -> dict:
         return result
 
     result['predicted_value'] = xgb_result['predicted_value']
+    result['currency']        = xgb_result.get('currency')
     result['confidence']      = xgb_result['confidence']
     result['candidates']      = xgb_result['candidates']
     result['status']          = 'success' if xgb_result['predicted_value'] else 'low_confidence'
@@ -624,21 +610,21 @@ def process_invoice(raw_image_path: str) -> dict:
     if result['predicted_value']:
         print(f"🎯 KẾT QUẢ CUỐI CÙNG: {result['predicted_value']}")
     else:
-        print("⚠️ XGBoost & NLI không tự tin — KÍCH HOẠT SLM FALLBACK...")
-        import sys
-        slm_path = str(CURRENT_DIR.parent / "SLM")
-        if slm_path not in sys.path:
-            sys.path.append(slm_path)
-        from slm_api import process_ocr_with_gemini
-        
-        slm_result = process_ocr_with_gemini(result['ocr_text'])
-        print(f"🧠 SLM JSON OUTPUT:\n{slm_result.model_dump_json(indent=2)}")
-        
-        # Update pipeline result with SLM fallback data
-        result['predicted_value'] = slm_result.total_amount
-        result['status'] = 'slm_fallback'
-        # Pass the full JSON structure back to the frontend/database
-        result['structured_data'] = slm_result.model_dump()
+        print("⚠️ XGBoost & NLI không tự tin — (SLM FALLBACK IS TEMPORARILY DISABLED)")
+        # import sys
+        # slm_path = str(CURRENT_DIR.parent / "SLM")
+        # if slm_path not in sys.path:
+        #     sys.path.append(slm_path)
+        # from slm_api import process_ocr_with_gemini
+        # 
+        # slm_result = process_ocr_with_gemini(result['ocr_text'])
+        # print(f"🧠 SLM JSON OUTPUT:\n{slm_result.model_dump_json(indent=2)}")
+        # 
+        # # Update pipeline result with SLM fallback data
+        # result['predicted_value'] = slm_result.total_amount
+        # result['status'] = 'slm_fallback'
+        # # Pass the full JSON structure back to the frontend/database
+        # result['structured_data'] = slm_result.model_dump()
         
     print(f"{'='*50}\n")
 
@@ -649,14 +635,35 @@ def process_invoice(raw_image_path: str) -> dict:
 #  ENTRY POINT  (for terminal testing)
 # ─────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        img_path = sys.argv[1]
-    else:
-        img_path = str(CURRENT_DIR / "input" / "test1.jpg")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("image_or_cmd", nargs='?', default=str(CURRENT_DIR / "input" / "test1.jpg"))
+    parser.add_argument("--feedback", action="store_true", help="Submit feedback")
+    parser.add_argument("--candidates", type=str, help="JSON string of candidates")
+    parser.add_argument("--correct_value", type=float, help="Correct value for feedback")
+    args = parser.parse_args()
 
+    if args.feedback:
+        if args.candidates and args.correct_value is not None:
+            candidates = json.loads(args.candidates)
+            save_feedback(candidates, args.correct_value)
+            print("===RESULT_JSON_START===")
+            print(json.dumps({"status": "success"}))
+            print("===RESULT_JSON_END===")
+        else:
+            print("===RESULT_JSON_START===")
+            print(json.dumps({"status": "error", "message": "Missing candidates or correct_value"}))
+            print("===RESULT_JSON_END===")
+        sys.exit(0)
+
+    img_path = args.image_or_cmd
     if not os.path.exists(img_path):
-        print(f" Không tìm thấy file ảnh: {img_path}")
-        print(" Dùng: python main.py <đường_dẫn_ảnh>")
+        print("===RESULT_JSON_START===")
+        print(json.dumps({"status": "error", "message": f"File not found: {img_path}"}))
+        print("===RESULT_JSON_END===")
         sys.exit(1)
 
     result = process_invoice(img_path)
+    print("===RESULT_JSON_START===")
+    print(json.dumps(result))
+    print("===RESULT_JSON_END===")

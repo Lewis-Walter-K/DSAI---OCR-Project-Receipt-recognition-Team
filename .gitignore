@@ -8,6 +8,7 @@ yolov8n-seg.pt
 *.png
 *.env
 *.venv
+venv/
 # Logs
 logs
 *.log
@@ -21,6 +22,7 @@ node_modules
 dist
 dist-ssr
 *.local
+test picture/
 
 # Editor directories and files
 .vscode/*
@@ -33,6 +35,8 @@ dist-ssr
 *.sln
 *.sw?
 prompt
+setup_env.bat
+requirements_utf8.txt
 
 
 temp_ocr_results.json

@@ -3,6 +3,7 @@ import shutil
 import tempfile
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional, Any
 
@@ -25,14 +26,19 @@ except ImportError as e:
 
 app = FastAPI(title="Invoice OCR API")
 
-# Setup CORS for React Frontend (typically running on localhost:5173 or localhost:5174)
+# CORS must be registered BEFORE any mount() calls
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173"],
+    allow_origins=["*"],  # Allow all origins during development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve processed images from Candidate_classification/outputs/
+OUTPUTS_DIR = CURRENT_DIR / "Candidate_classification" / "outputs"
+OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
 
 
 class FeedbackRequest(BaseModel):
@@ -62,7 +68,14 @@ async def upload_invoice(file: UploadFile = File(...)):
         # Clean up temp file
         if os.path.exists(temp_path):
             os.remove(temp_path)
-            
+
+        # Inject the processed image URL into the response
+        camscanner_path = OUTPUTS_DIR / "CAMSCANNER_RESULT.jpg"
+        if camscanner_path.exists():
+            # Add cache-busting timestamp so browser always fetches latest
+            import time
+            result["processed_image_url"] = f"http://localhost:8000/static/outputs/CAMSCANNER_RESULT.jpg?t={int(time.time())}"
+
         return result
     except Exception as e:
         # Clean up temp file
@@ -105,10 +118,14 @@ async def llm_parse_invoice(file: UploadFile = File(...)):
     try:
         import google.generativeai as genai
         from PIL import Image
+        from dotenv import load_dotenv
 
-        api_key = os.getenv("GEMINI_API_KEY")
+        # Load the .env from Candidate_classification (where the key actually lives)
+        load_dotenv()
+
+        api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            raise HTTPException(status_code=500, detail="GEMINI_API_KEY not set in environment")
+            raise HTTPException(status_code=500, detail="GOOGLE_API_KEY not set in Candidate_classification/.env")
 
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-1.5-flash")

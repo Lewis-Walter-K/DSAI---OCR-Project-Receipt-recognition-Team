@@ -22,6 +22,8 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   // Track the raw captured file so Edit page can re-call LLM if needed
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
+  // URL of the processed CAMSCANNER_RESULT.jpg from backend
+  const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null);
   // "success" | "llm_fallback" | "low_confidence" — drives the banner in Edit page
   const [apiStatus, setApiStatus] = useState<string>('success');
 
@@ -110,6 +112,7 @@ const App: React.FC = () => {
 
       setCandidates(response.candidates || []);
       setApiStatus(response.status || 'success');
+      setProcessedImageUrl(response.processed_image_url || null);
       setPendingBill(mapResponseToBill(response));
       setIsEditing(true);
     } catch (error) {
@@ -201,6 +204,8 @@ const App: React.FC = () => {
             onCancel={() => setIsEditing(false)}
             apiStatus={apiStatus}
             onLlmFallback={handleLlmFallback}
+            imageFile={capturedFile}
+            processedImageUrl={processedImageUrl}
           />
         )}
 

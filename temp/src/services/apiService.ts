@@ -7,6 +7,8 @@ export interface UploadResponse {
   // "success" | "llm_fallback" | "low_confidence"
   status: string;
   currency?: string;
+  /** URL to the post-processed CAMSCANNER_RESULT.jpg served by backend */
+  processed_image_url?: string;
   structured_data?: {
     bill_purpose?: string;
     bill_date?: string;

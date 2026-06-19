@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Check, AlertCircle, ChevronLeft, ReceiptText, Sparkles, Loader2 } from 'lucide-react';
 import type { Bill, UserSettings } from '../types/bill_data';
 
@@ -11,6 +11,10 @@ interface EditProps {
   apiStatus: string;
   /** Trigger LLM re-parse from parent */
   onLlmFallback: () => Promise<void>;
+  /** The raw captured image file (fallback preview) */
+  imageFile: File | null;
+  /** URL to backend-served CAMSCANNER_RESULT.jpg (preferred preview) */
+  processedImageUrl: string | null;
 }
 
 const EXCHANGE_RATES: Record<string, number> = {
@@ -28,9 +32,24 @@ const EXCHANGE_RATES: Record<string, number> = {
   VND: 1
 };
 
-const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCancel, apiStatus, onLlmFallback }) => {
+const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCancel, apiStatus, onLlmFallback, imageFile, processedImageUrl }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLlmLoading, setIsLlmLoading] = useState(false);
+
+  // Create a fallback object URL from the raw captured file
+  const rawImageUrl = useMemo(() => {
+    if (!imageFile) return null;
+    return URL.createObjectURL(imageFile);
+  }, [imageFile]);
+
+  // Revoke fallback URL when component unmounts
+  useEffect(() => {
+    return () => { if (rawImageUrl) URL.revokeObjectURL(rawImageUrl); };
+  }, [rawImageUrl]);
+
+  // Prefer processed (CamScanner) image, fall back to raw upload
+  const previewUrl = processedImageUrl || rawImageUrl;
+
   const [formData, setFormData] = useState<Partial<Bill>>({
     bill_purpose: initialData.bill_purpose || '',
     bill_date: initialData.bill_date || new Date().toISOString().split('T')[0],
@@ -143,7 +162,46 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
       )}
 
       <div className="flex-1 overflow-y-auto no-scrollbar px-6 pt-6 pb-6">
-        {/* Modern Receipt Card */}
+
+        {/* Receipt Image Preview (CamScanner processed image preferred) */}
+        {previewUrl && (
+          <div style={{
+            marginBottom: 16,
+            borderRadius: 20,
+            overflow: 'hidden',
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
+            background: '#f8fafc',
+            position: 'relative',
+          }}>
+            <img
+              src={previewUrl}
+              alt="Processed receipt"
+              style={{
+                width: '100%',
+                maxHeight: 280,
+                objectFit: 'contain',
+                display: 'block',
+              }}
+            />
+            <div style={{
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              padding: '8px 14px',
+              background: 'linear-gradient(to top, rgba(0,0,0,0.45), transparent)',
+              color: '#fff',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.05em',
+            }}>
+              RECEIPT PREVIEW — verify values below
+            </div>
+          </div>
+        )}
+
+        {/* Data Card */}
         <div className="bg-white rounded-[24px] p-6 shadow-sm border border-slate-100 mb-6">
 
           {/* Header: Scanned amount + always-visible Re-parse button */}

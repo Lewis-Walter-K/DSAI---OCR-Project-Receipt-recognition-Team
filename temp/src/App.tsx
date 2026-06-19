@@ -15,6 +15,7 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('capture');
   const [isEditing, setIsEditing] = useState(false);
   const [pendingBill, setPendingBill] = useState<Partial<Bill> | null>(null);
+  const [candidates, setCandidates] = useState<any[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
   const [settings, setSettings] = useState<UserSettings>({ region: 'VN', base_currency: 'VND' });
   const [loading, setLoading] = useState(false);
@@ -81,6 +82,26 @@ const App: React.FC = () => {
     console.log('Uploading image to backend:', file.name);
     
     try {
+      const response = await fetch('/api/process-receipt', {
+        method: 'POST',
+        body: file,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to process receipt: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('Process result:', result);
+      
+      setCandidates(result.candidates || []);
+
+      const resultBill: Partial<Bill> = {
+        bill_purpose: 'Scanned Bill',
+        bill_date: new Date().toISOString().split('T')[0],
+        original_value: result.predicted_value || 0,
+        original_currency: result.currency || settings.base_currency,
+    try {
       const response = await apiService.uploadInvoice(file);
       console.log('Backend response:', response);
 
@@ -90,6 +111,8 @@ const App: React.FC = () => {
         original_value: response.predicted_value || 0,
         original_currency: 'VND', // Default or could be extracted
       };
+      
+      setPendingBill(resultBill);
 
       // If SLM fallback was used, we might have structured data
       if (response.structured_data) {
@@ -101,15 +124,31 @@ const App: React.FC = () => {
       setPendingBill(predictedBill);
       setIsEditing(true);
     } catch (error) {
+      console.error('Error uploading image:', error);
+      alert('Failed to process the receipt. Please try again.');
+    } finally {
+    } catch (error) {
       console.error('Error processing image:', error);
       alert('Failed to process image. Please check the backend server.');
     } finally {
       setLoading(false);
     }
+    }
   };
 
   const handleConfirmBill = async (finalBill: Bill) => {
     try {
+      if (candidates && candidates.length > 0) {
+        await fetch('/api/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            candidates,
+            correct_value: finalBill.original_value
+          })
+        }).catch(err => console.error("Feedback API error:", err));
+      }
+
       // 1. Save locally to Firebase/Service
       await billService.saveBill(finalBill);
       
@@ -123,6 +162,7 @@ const App: React.FC = () => {
 
       setIsEditing(false);
       setPendingBill(null);
+      setCandidates([]);
       setCurrentPage('pie');
     } catch (error) {
       console.error('Error saving bill:', error);
@@ -152,6 +192,7 @@ const App: React.FC = () => {
   };
 
   return (
+    <div className="h-[100dvh] w-full bg-gray-50 flex justify-center overflow-hidden">
     <div className="h-[100dvh] w-full bg-gray-50 flex justify-center overflow-hidden">
       <div className="w-full max-w-[480px] bg-white h-full relative shadow-2xl flex flex-col overflow-hidden">
         {!isEditing && (

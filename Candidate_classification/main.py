@@ -69,8 +69,8 @@ def _flatten(prompts):
 
 _pos_prompts = _flatten([
     "order total, grand total, total amount to pay, amount due, balance due, net total, total-eft",  # EN
-    "tổng cộng, tổng tiền, thành tiền, thanh toán, số tiền thanh toán",                             # VI
-    "tong cong, tong tien, thanh tien, thanh toan, so tien thanh toan",                             # VI (no accent)
+    "tổng cộng, tổng tiền, thành tiền, thanh toán, số tiền thanh toán, tổng tier, thành tier, Tổng tiền hàng",                             # VI
+    "tong cong, tong tien, thanh tien, thanh toan, so tien thanh toan, tong tier, thanh tier, Tong tien hang",      # VI (no accent)
     "消费合计, 合计, 总计, 实付金额, 应付金额, 收款金额, 结账金额",                                          # ZH
     "合計, お会計, 請求金額, 支払合計, お支払い金額",                                                      # JA
     "합계, 총액, 결제금액, 청구금액, 지불합계",                                                          # KO
@@ -107,7 +107,7 @@ QUANTITY_VECTORS = embedding_model.encode(_qty_prompts)
 TAX_VECTORS      = embedding_model.encode(_tax_prompts)
 
 CURRENCY_PATTERN = re.compile(
-    r'[\$€£¥₩₹₽₺₴₦฿₫₱¢]|USD|EUR|VND|JPY|GBP|AUD|CAD|SGD',
+    r'[\$€£¥₩₹₽₺₴₦฿₫₱¢]|USD|EUR|EURO|VND|JPY|GBP|AUD|CAD|SGD|CHF',
     re.IGNORECASE
 )
 
@@ -190,26 +190,7 @@ def img_scanner(img_path: str) -> str | None:
     flat = _flatten_receipt(cropped, pts)
 
     # --- Rotate (Tesseract OSD) ---
-    pytesseract.pytesseract.tesseract_cmd = (
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    )
-    try:
-        osd        = pytesseract.image_to_osd(flat, output_type=Output.DICT)
-        angle      = osd["rotate"]
-        confidence = osd["orientation_conf"]
-        print(f"🔍 OSD dự đoán {angle}° | confidence: {confidence:.2f}")
-        if confidence >= 4.0:
-            ROTATE_MAP = {
-                90:  cv2.ROTATE_90_CLOCKWISE,
-                180: cv2.ROTATE_180,
-                270: cv2.ROTATE_90_COUNTERCLOCKWISE,
-            }
-            if angle in ROTATE_MAP and angle not in [90, 270]:  # guard portrait
-                flat = cv2.rotate(flat, ROTATE_MAP[angle])
-        else:
-            print("⚠️ OSD confidence quá thấp, bỏ qua xoay.")
-    except Exception as e:
-        print(f"⚠️ Lỗi OSD: {e}")
+    # Removed Tesseract OSD in favor of PaddleOCR's built-in angle classifier.
 
     # --- Adaptive threshold (CamScanner-style) ---
     gray     = cv2.cvtColor(flat, cv2.COLOR_BGR2GRAY)
@@ -283,16 +264,38 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
             if value is None:
                 continue
 
-            # Build neighbor context
+            # --- ĐOẠN CODE MỚI ---
             left  = text_clean[max(0, s_idx - 25):s_idx]
             right = text_clean[e_idx:e_idx + 15]
+            prev_line = ''
 
-            # Look-back: if no letters/numbers on the left, peek at the previous line
-            if not re.search(r'[a-zA-Z\d]', left) and idx > 0:
-                prev_text = ocr_results[idx - 1][1]
-                prev_line = prev_text[-25:] if not re.search(r'\d', prev_text) else ''
-            else:
-                prev_line = ''
+            # Nếu xung quanh con số không có chữ nào
+            if not re.search(r'[a-zA-Z\u00C0-\u024F\u4E00-\u9FFF]', left):
+                y_center_current = float(np.mean([p[1] for p in bbox]))
+                same_line_texts = []
+                
+                for other_bbox, other_text in ocr_results:
+                    if other_text == text: 
+                        continue
+                    
+                    other_y_center = float(np.mean([p[1] for p in other_bbox]))
+                    
+                    # NỚI LỎNG: Cho phép box lệch nhau tới 45 pixels (để bù trừ lỗi nghiêng)
+                    if abs(other_y_center - y_center_current) < 45:
+                        clean_text = re.sub(r'\d+', '', other_text).strip()
+                        if len(clean_text) > 2: # Bỏ qua các ký tự rác quá ngắn
+                            same_line_texts.append(clean_text)
+                
+                if same_line_texts:
+                    prev_line = " ".join(same_line_texts)[-40:]
+                else:
+                    # LƯỚI BỌC HẬU TỐI THƯỢNG: Nếu trục Y thất bại, gom luôn 3 dòng liền trước nó
+                    fallback_texts = []
+                    for i in range(max(0, idx - 3), idx):
+                        clean_fallback = re.sub(r'\d+', '', ocr_results[i][1]).strip()
+                        if len(clean_fallback) > 2:
+                            fallback_texts.append(clean_fallback)
+                    prev_line = " ".join(fallback_texts)[-40:]
 
             neighbor = f"{prev_line} {left} {right}".strip()
             if not neighbor:
@@ -326,7 +329,9 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
     vectors      = embedding_model.encode(texts, batch_size=32, show_progress_bar=False)
 
     for cand, vec in zip(candidates, vectors):
-        cand['has_currency'] = 1.0 if CURRENCY_PATTERN.search(cand['neighbor']) else 0.0
+        match = CURRENCY_PATTERN.search(cand['neighbor'])
+        cand['has_currency'] = 1.0 if match else 0.0
+        cand['currency']     = match.group().strip() if match else None
         cand['text_length']  = float(len(cand['neighbor']))
         cand['semantic_sim'] = _semantic_sim_from_vec(vec, cand['neighbor'])
 
@@ -352,22 +357,41 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
             'has_currency':  c['has_currency'],
         })
 
+    print("\n🐛 [DEBUG] TẤT CẢ CÁC SỐ ĐÃ TRÍCH XUẤT ĐƯỢC (TRƯỚC KHI VÀO XGBOOST):")
+    for c in candidates:
+        print(f"   - Số: {c['value']:>10} | Sem: {c['semantic_sim']:.2f} | is_max: {c['is_max']} | Ngữ cảnh: '{c['neighbor']}'")
+
     df      = pd.DataFrame(rows)
     probs   = xgb_model.predict_proba(df[['semantic_sim', 'normalized_y',
                                            'is_max', 'text_length', 'has_currency']])[:, 1]
-
+    
     for i, c in enumerate(candidates):
         raw_score = float(probs[i])
         # --- ĐIỀU CHỈNH THEO NGỮ NGHĨA (Semantic Reweighting) ---
         # Nếu NLP không tìm thấy bất kỳ sự liên quan nào đến "Tổng tiền",
         # giảm điểm XGBoost xuống 50% để ngăn "tên món ăn" hoặc
         # "số ngẫu nhiên" chiếm Top 1 nhờ vị trí cuối trang.
+        # if c['semantic_sim'] < 0.05:
+        #     c['xgb_score'] = raw_score * 0.5
+        # elif c['semantic_sim'] < 0.15:
+        #     c['xgb_score'] = raw_score * 0.75
+        # else:
+        #     c['xgb_score'] = raw_score
+
+        # --- ĐIỀU CHỈNH THEO NGỮ NGHĨA (Semantic Reweighting) ---
         if c['semantic_sim'] < 0.05:
-            c['xgb_score'] = raw_score * 0.5
+            c['xgb_score'] = raw_score * 0.1
         elif c['semantic_sim'] < 0.15:
             c['xgb_score'] = raw_score * 0.75
+        elif c['semantic_sim'] >= 0.7:
+            # 🚀 QUYỀN PHỦ QUYẾT: Ngữ nghĩa quá rõ ràng -> Ép điểm XGBoost lên 95%
+            # Để đảm bảo nó CHẮC CHẮN lọt vào Top 5 cho NLI đọc
+            c['xgb_score'] = max(raw_score, 0.95)
+        elif c['semantic_sim'] >= 0.5:
+            # Khuyến khích nhẹ nếu ngữ nghĩa khá ổn
+            c['xgb_score'] = max(raw_score, 0.80)
         else:
-            c['xgb_score'] = raw_score
+            c['xgb_score'] = raw_score * (0.5 + c['semantic_sim'])
 
     best = max(candidates, key=lambda x: x['xgb_score'])
 
@@ -425,6 +449,7 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
 
     return {
         'predicted_value': best['value'] if is_confident else None,
+        'currency':        best.get('currency') if is_confident else None,
         'confidence':      best['xgb_score'],
         'candidates':      candidates,  # full list for feedback matching
     }
@@ -529,6 +554,7 @@ def process_invoice(raw_image_path: str) -> dict:
     """
     result = {
         'predicted_value': None,
+        'currency':        None,
         'confidence':      0.0,
         'candidates':      [],
         'ocr_text':        '',
@@ -575,6 +601,7 @@ def process_invoice(raw_image_path: str) -> dict:
         return result
 
     result['predicted_value'] = xgb_result['predicted_value']
+    result['currency']        = xgb_result.get('currency')
     result['confidence']      = xgb_result['confidence']
     result['candidates']      = xgb_result['candidates']
     result['status']          = 'success' if xgb_result['predicted_value'] else 'low_confidence'
@@ -583,21 +610,21 @@ def process_invoice(raw_image_path: str) -> dict:
     if result['predicted_value']:
         print(f"🎯 KẾT QUẢ CUỐI CÙNG: {result['predicted_value']}")
     else:
-        print("⚠️ XGBoost & NLI không tự tin — KÍCH HOẠT SLM FALLBACK...")
-        import sys
-        slm_path = str(CURRENT_DIR.parent / "SLM")
-        if slm_path not in sys.path:
-            sys.path.append(slm_path)
-        from slm_api import process_ocr_with_gemini
-        
-        slm_result = process_ocr_with_gemini(result['ocr_text'])
-        print(f"🧠 SLM JSON OUTPUT:\n{slm_result.model_dump_json(indent=2)}")
-        
-        # Update pipeline result with SLM fallback data
-        result['predicted_value'] = slm_result.total_amount
-        result['status'] = 'slm_fallback'
-        # Pass the full JSON structure back to the frontend/database
-        result['structured_data'] = slm_result.model_dump()
+        print("⚠️ XGBoost & NLI không tự tin — (SLM FALLBACK IS TEMPORARILY DISABLED)")
+        # import sys
+        # slm_path = str(CURRENT_DIR.parent / "SLM")
+        # if slm_path not in sys.path:
+        #     sys.path.append(slm_path)
+        # from slm_api import process_ocr_with_gemini
+        # 
+        # slm_result = process_ocr_with_gemini(result['ocr_text'])
+        # print(f"🧠 SLM JSON OUTPUT:\n{slm_result.model_dump_json(indent=2)}")
+        # 
+        # # Update pipeline result with SLM fallback data
+        # result['predicted_value'] = slm_result.total_amount
+        # result['status'] = 'slm_fallback'
+        # # Pass the full JSON structure back to the frontend/database
+        # result['structured_data'] = slm_result.model_dump()
         
     print(f"{'='*50}\n")
 
@@ -608,14 +635,35 @@ def process_invoice(raw_image_path: str) -> dict:
 #  ENTRY POINT  (for terminal testing)
 # ─────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        img_path = sys.argv[1]
-    else:
-        img_path = str(CURRENT_DIR / "input" / "test6.png")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("image_or_cmd", nargs='?', default=str(CURRENT_DIR / "input" / "test1.jpg"))
+    parser.add_argument("--feedback", action="store_true", help="Submit feedback")
+    parser.add_argument("--candidates", type=str, help="JSON string of candidates")
+    parser.add_argument("--correct_value", type=float, help="Correct value for feedback")
+    args = parser.parse_args()
 
+    if args.feedback:
+        if args.candidates and args.correct_value is not None:
+            candidates = json.loads(args.candidates)
+            save_feedback(candidates, args.correct_value)
+            print("===RESULT_JSON_START===")
+            print(json.dumps({"status": "success"}))
+            print("===RESULT_JSON_END===")
+        else:
+            print("===RESULT_JSON_START===")
+            print(json.dumps({"status": "error", "message": "Missing candidates or correct_value"}))
+            print("===RESULT_JSON_END===")
+        sys.exit(0)
+
+    img_path = args.image_or_cmd
     if not os.path.exists(img_path):
-        print(f" Không tìm thấy file ảnh: {img_path}")
-        print(" Dùng: python main.py <đường_dẫn_ảnh>")
+        print("===RESULT_JSON_START===")
+        print(json.dumps({"status": "error", "message": f"File not found: {img_path}"}))
+        print("===RESULT_JSON_END===")
         sys.exit(1)
 
     result = process_invoice(img_path)
+    print("===RESULT_JSON_START===")
+    print(json.dumps(result))
+    print("===RESULT_JSON_END===")

@@ -9,7 +9,23 @@ interface EditProps {
   onCancel: () => void;
 }
 
+const EXCHANGE_RATES: Record<string, number> = {
+  USD: 25450,
+  EUR: 27500,
+  CHF: 28200,
+  GBP: 32500,
+  AUD: 17000,
+  CAD: 18500,
+  SGD: 19000,
+  JPY: 165,
+  KRW: 18.5,
+  CNY: 3500,
+  INR: 300,
+  VND: 1
+};
+
 const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCancel }) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState<Partial<Bill>>({
     bill_purpose: initialData.bill_purpose || '',
     bill_date: initialData.bill_date || new Date().toISOString().split('T')[0],
@@ -24,7 +40,9 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
 
   useEffect(() => {
     if (formData.original_currency !== userSettings.base_currency) {
-      const rate = formData.original_currency === 'USD' && userSettings.base_currency === 'VND' ? 25450 : 1;
+      const fromRate = EXCHANGE_RATES[formData.original_currency || 'USD'] || 1;
+      const toRate = EXCHANGE_RATES[userSettings.base_currency || 'VND'] || 1;
+      const rate = fromRate / toRate;
       const convertedValue = (formData.original_value || 0) * rate;
       
       setFormData(prev => ({ ...prev, total_bill_value: convertedValue, converted: true }));
@@ -35,9 +53,15 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
     }
   }, [formData.original_currency, formData.original_value, userSettings.base_currency]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onConfirm({ ...formData, timestamp_created: Date.now() } as Bill);
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await onConfirm({ ...formData, timestamp_created: Date.now() } as Bill);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -51,6 +75,7 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
         <div className="w-10"></div> {/* Spacer for centering */}
       </div>
 
+      <div className="flex-1 overflow-y-auto no-scrollbar px-6 pt-6 pb-6">
       <div className="flex-1 overflow-y-auto no-scrollbar px-6 pt-6 pb-6">
         {/* Modern Receipt Card */}
         <div className="bg-white rounded-[24px] p-6 shadow-sm border border-slate-100 mb-6">
@@ -115,6 +140,15 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
                   <option value="USD">USD ($)</option>
                   <option value="VND">VND (₫)</option>
                   <option value="EUR">EUR (€)</option>
+                  <option value="CHF">CHF (₣)</option>
+                  <option value="GBP">GBP (£)</option>
+                  <option value="JPY">JPY (¥)</option>
+                  <option value="KRW">KRW (₩)</option>
+                  <option value="CNY">CNY (¥)</option>
+                  <option value="SGD">SGD ($)</option>
+                  <option value="AUD">AUD ($)</option>
+                  <option value="CAD">CAD ($)</option>
+                  <option value="INR">INR (₹)</option>
                 </select>
                 <div className="absolute right-4 top-1/2 mt-1 pointer-events-none text-slate-400">
                   <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -146,8 +180,12 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
           type="submit"
           className="w-full bg-blue-600 text-white py-4 rounded-full font-bold shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 hover:bg-blue-700 mt-4"
         >
-          <Check size={22} strokeWidth={3} />
-          Confirm & Save Bill
+          {isSubmitting ? (
+            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <Check size={22} strokeWidth={3} />
+          )}
+          {isSubmitting ? 'Saving & Learning...' : 'Confirm & Save Bill'}
         </button>
       </div>
     </div>

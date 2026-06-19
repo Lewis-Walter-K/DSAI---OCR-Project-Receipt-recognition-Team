@@ -13,6 +13,14 @@ const EXCHANGE_RATES: Record<string, number> = {
   USD: 25450,
   EUR: 27500,
   CHF: 28200,
+  GBP: 32500,
+  AUD: 17000,
+  CAD: 18500,
+  SGD: 19000,
+  JPY: 165,
+  KRW: 18.5,
+  CNY: 3500,
+  INR: 300,
   VND: 1
 };
 
@@ -132,6 +140,14 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
                   <option value="VND">VND (₫)</option>
                   <option value="EUR">EUR (€)</option>
                   <option value="CHF">CHF (₣)</option>
+                  <option value="GBP">GBP (£)</option>
+                  <option value="JPY">JPY (¥)</option>
+                  <option value="KRW">KRW (₩)</option>
+                  <option value="CNY">CNY (¥)</option>
+                  <option value="SGD">SGD ($)</option>
+                  <option value="AUD">AUD ($)</option>
+                  <option value="CAD">CAD ($)</option>
+                  <option value="INR">INR (₹)</option>
                 </select>
                 <div className="absolute right-4 top-1/2 mt-1 pointer-events-none text-slate-400">
                   <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">

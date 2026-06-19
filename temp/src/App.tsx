@@ -158,7 +158,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-full bg-gray-50 flex justify-center overflow-hidden">
+    <div className="h-[100dvh] w-full bg-gray-50 flex justify-center overflow-hidden">
       <div className="w-full max-w-[480px] bg-white h-full relative shadow-2xl flex flex-col overflow-hidden">
         <TopBar 
           region={settings.region} 

@@ -9,7 +9,15 @@ interface EditProps {
   onCancel: () => void;
 }
 
+const EXCHANGE_RATES: Record<string, number> = {
+  USD: 25450,
+  EUR: 27500,
+  CHF: 28200,
+  VND: 1
+};
+
 const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCancel }) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState<Partial<Bill>>({
     bill_purpose: initialData.bill_purpose || '',
     bill_date: initialData.bill_date || new Date().toISOString().split('T')[0],
@@ -24,7 +32,9 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
 
   useEffect(() => {
     if (formData.original_currency !== userSettings.base_currency) {
-      const rate = formData.original_currency === 'USD' && userSettings.base_currency === 'VND' ? 25450 : 1;
+      const fromRate = EXCHANGE_RATES[formData.original_currency || 'USD'] || 1;
+      const toRate = EXCHANGE_RATES[userSettings.base_currency || 'VND'] || 1;
+      const rate = fromRate / toRate;
       const convertedValue = (formData.original_value || 0) * rate;
       
       setFormData(prev => ({ ...prev, total_bill_value: convertedValue, converted: true }));
@@ -35,9 +45,15 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
     }
   }, [formData.original_currency, formData.original_value, userSettings.base_currency]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onConfirm({ ...formData, timestamp_created: Date.now() } as Bill);
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await onConfirm({ ...formData, timestamp_created: Date.now() } as Bill);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -51,7 +67,7 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
         <div className="w-10"></div> {/* Spacer for centering */}
       </div>
 
-      <div className="flex-1 overflow-y-auto no-scrollbar px-6 pt-6 pb-32">
+      <div className="flex-1 overflow-y-auto no-scrollbar px-6 pt-6 pb-6">
         {/* Modern Receipt Card */}
         <div className="bg-white rounded-[24px] p-6 shadow-sm border border-slate-100 mb-6">
           <div className="flex items-center gap-3 mb-6 pb-6 border-b border-slate-100">
@@ -115,6 +131,7 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
                   <option value="USD">USD ($)</option>
                   <option value="VND">VND (₫)</option>
                   <option value="EUR">EUR (€)</option>
+                  <option value="CHF">CHF (₣)</option>
                 </select>
                 <div className="absolute right-4 top-1/2 mt-1 pointer-events-none text-slate-400">
                   <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -135,7 +152,7 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
       </div>
 
       {/* Sticky Bottom Action Bar */}
-      <div className="absolute bottom-0 left-0 right-0 p-6 bg-white border-t border-slate-100 shadow-[0_-10px_30px_rgb(0,0,0,0.03)] z-20">
+      <div className="shrink-0 p-6 bg-white border-t border-slate-100 shadow-[0_-10px_30px_rgb(0,0,0,0.03)] z-20">
         <div className="flex items-center justify-between mb-4 px-2">
           <span className="text-sm font-bold text-slate-400 uppercase tracking-wider">Final Total</span>
           <span className="text-3xl font-black text-blue-600">{formData.total_bill_value?.toLocaleString()} <span className="text-sm font-bold text-slate-400">{userSettings.base_currency}</span></span>
@@ -143,10 +160,19 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
         <button 
           form="bill-form"
           type="submit"
-          className="w-full bg-blue-600 text-white py-4 rounded-full font-bold shadow-[0_8px_20px_rgb(37,99,235,0.25)] active:scale-[0.98] transition-all flex items-center justify-center gap-2 hover:bg-blue-700"
+          disabled={isSubmitting}
+          className={`w-full py-4 rounded-full font-bold shadow-[0_8px_20px_rgb(37,99,235,0.25)] active:scale-[0.98] transition-all flex items-center justify-center gap-2 ${
+            isSubmitting 
+              ? 'bg-blue-400 text-white cursor-not-allowed' 
+              : 'bg-blue-600 text-white hover:bg-blue-700'
+          }`}
         >
-          <Check size={22} strokeWidth={3} />
-          Confirm & Save Bill
+          {isSubmitting ? (
+            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <Check size={22} strokeWidth={3} />
+          )}
+          {isSubmitting ? 'Saving & Learning...' : 'Confirm & Save Bill'}
         </button>
       </div>
     </div>

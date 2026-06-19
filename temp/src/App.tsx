@@ -24,6 +24,8 @@ const App: React.FC = () => {
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
   // URL of the processed CAMSCANNER_RESULT.jpg from backend
   const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null);
+  // Raw OCR text extracted by backend (for LLM fallback)
+  const [ocrText, setOcrText] = useState<string | null>(null);
   // "success" | "llm_fallback" | "low_confidence" — drives the banner in Edit page
   const [apiStatus, setApiStatus] = useState<string>('success');
 
@@ -70,7 +72,7 @@ const App: React.FC = () => {
     // Subscribe to settings and bills
     const unsubscribeSettings = billService.getSettings(setSettings);
     const unsubscribeBills = billService.subscribeToBills((fetchedBills) => {
-      // Point 3: Fallback to mock data for UI testing if the database is empty
+      // Fallback to mock data for UI testing if the database is empty
       if (fetchedBills.length === 0) {
         setBills(mockBills);
       } else {
@@ -113,6 +115,7 @@ const App: React.FC = () => {
       setCandidates(response.candidates || []);
       setApiStatus(response.status || 'success');
       setProcessedImageUrl(response.processed_image_url || null);
+      setOcrText(response.ocr_text || null);
       setPendingBill(mapResponseToBill(response));
       setIsEditing(true);
     } catch (error) {
@@ -125,8 +128,11 @@ const App: React.FC = () => {
 
   /** Called from Edit page when user manually triggers LLM re-parse */
   const handleLlmFallback = async (): Promise<void> => {
-    if (!capturedFile) return;
-    const response = await apiService.callLlmFallback(capturedFile);
+    if (!ocrText) {
+      alert("No OCR text available to run AI on.");
+      return;
+    }
+    const response = await apiService.callLlmFallback(ocrText);
     setCandidates(response.candidates || []);
     setApiStatus(response.status || 'llm_fallback');
     setPendingBill(prev => ({ ...prev, ...mapResponseToBill(response) }));

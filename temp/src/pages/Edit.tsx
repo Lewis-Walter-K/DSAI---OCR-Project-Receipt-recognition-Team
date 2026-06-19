@@ -60,6 +60,19 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
     ...initialData
   });
 
+  // When initialData changes (e.g. after Ask AI fallback completes), sync the form
+  useEffect(() => {
+    setFormData(prev => ({
+      ...prev,
+      bill_purpose: initialData.bill_purpose || prev.bill_purpose,
+      bill_date: initialData.bill_date || prev.bill_date,
+      original_value: initialData.original_value !== undefined ? initialData.original_value : prev.original_value,
+      original_currency: initialData.original_currency || prev.original_currency,
+      total_bill_value: initialData.total_bill_value !== undefined ? initialData.total_bill_value : prev.total_bill_value,
+      ...initialData
+    }));
+  }, [initialData]);
+
   const [conversionMessage, setConversionMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -103,7 +116,7 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
   return (
     <div className="flex-1 w-full bg-slate-50 flex flex-col animate-slide-up">
       {/* Header */}
-      <div className="bg-white px-6 pt-8 pb-4 rounded-b-[32px] shadow-sm relative z-10 flex items-center justify-between">
+      <div style={{padding: '14px'}} className="bg-white px-6 pt-8 pb-4 rounded-b-[32px] shadow-sm relative z-10 flex items-center justify-between">
         <button onClick={onCancel} className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors">
           <ChevronLeft size={24} />
         </button>
@@ -263,7 +276,7 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
           <form id="bill-form" onSubmit={handleSubmit} className="space-y-5">
             {/* Input Group: Purpose */}
             <div className="bg-slate-50 rounded-[20px] p-4 border border-transparent focus-within:border-blue-200 focus-within:bg-blue-50/30 transition-colors">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Purpose Category</label>
+              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Purpose</label>
               <input 
                 type="text" 
                 value={formData.bill_purpose}
@@ -276,7 +289,7 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
 
             {/* Input Group: Date */}
             <div className="bg-slate-50 rounded-[20px] p-4 border border-transparent focus-within:border-blue-200 focus-within:bg-blue-50/30 transition-colors">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Date</label>
+              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Date (DD/MM/YYYY)</label>
               <input 
                 type="date" 
                 value={formData.bill_date}
@@ -289,7 +302,7 @@ const Edit: React.FC<EditProps> = ({ initialData, userSettings, onConfirm, onCan
             <div className="grid grid-cols-2 gap-4">
               {/* Input Group: Value */}
               <div className="bg-slate-50 rounded-[20px] p-4 border border-transparent focus-within:border-blue-200 focus-within:bg-blue-50/30 transition-colors">
-                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Original Value</label>
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Total Value</label>
                 <input 
                   type="number" 
                   step="0.01"

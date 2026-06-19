@@ -9,6 +9,8 @@ export interface UploadResponse {
   currency?: string;
   /** URL to the post-processed CAMSCANNER_RESULT.jpg served by backend */
   processed_image_url?: string;
+  /** Raw OCR text extracted by PaddleOCR on the backend */
+  ocr_text?: string;
   structured_data?: {
     bill_purpose?: string;
     bill_date?: string;
@@ -40,16 +42,16 @@ export const apiService = {
   },
 
   /**
-   * Call the LLM (Gemini) directly to re-parse the receipt image.
+   * Call the SLM fallback directly using OCR text.
    * Used as a human-triggered fallback when XGBoost result is unreliable.
    */
-  async callLlmFallback(file: File): Promise<UploadResponse> {
-    const formData = new FormData();
-    formData.append('file', file);
-
+  async callLlmFallback(ocrText: string): Promise<UploadResponse> {
     const response = await fetch(`${API_BASE_URL}/llm-parse`, {
       method: 'POST',
-      body: formData,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ocr_text: ocrText }),
     });
 
     if (!response.ok) {

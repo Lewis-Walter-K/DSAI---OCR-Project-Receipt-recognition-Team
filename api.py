@@ -96,79 +96,45 @@ async def submit_feedback(data: FeedbackRequest):
         raise HTTPException(status_code=500, detail=f"Feedback Error: {e}")
 
 
+import sys
+slm_path = str(CURRENT_DIR / "SLM")
+if slm_path not in sys.path:
+    sys.path.append(slm_path)
+from slm_api import process_ocr_with_gemini
+
+class LlmParseRequest(BaseModel):
+    ocr_text: str
+
 @app.post("/api/llm-parse")
-async def llm_parse_invoice(file: UploadFile = File(...)):
+async def llm_parse_invoice(request: LlmParseRequest):
     """
     Human-triggered LLM fallback endpoint.
     Called from the Edit page when the user clicks "Ask AI (Gemini)".
-    Bypasses XGBoost and sends the image directly to Gemini for structured extraction.
+    Passes the OCR text directly to the SLM API for parsing.
     """
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file selected")
+    if not request.ocr_text:
+        raise HTTPException(status_code=400, detail="No OCR text provided")
 
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
-            shutil.copyfileobj(file.file, temp_file)
-            temp_path = temp_file.name
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
-    finally:
-        file.file.close()
-
-    try:
-        import google.generativeai as genai
-        from PIL import Image
-        from dotenv import load_dotenv
-
-        # Load the .env from Candidate_classification (where the key actually lives)
-        load_dotenv()
-
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise HTTPException(status_code=500, detail="GOOGLE_API_KEY not set in Candidate_classification/.env")
-
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
-        image = Image.open(temp_path)
-        prompt = (
-            "You are a receipt parser. Extract the following fields from this receipt image and return ONLY valid JSON:\n"
-            "{\n"
-            '  "total_amount": <number, the final total to pay>,\n'
-            '  "currency": "<3-letter ISO currency code, e.g. VND, USD>",\n'
-            '  "bill_purpose": "<one of: Eating, Coffee, Shopping, Groceries, Transport, Utilities, Entertainment, Health, Other>",\n'
-            '  "bill_date": "<YYYY-MM-DD format, today if unclear>"\n'
-            "}\n"
-            "Return ONLY the JSON object, no explanation."
-        )
-
-        response = model.generate_content([prompt, image])
-        raw = response.text.strip().strip("```json").strip("```").strip()
-
-        import json
-        parsed = json.loads(raw)
-
+        slm_result = process_ocr_with_gemini(request.ocr_text)
+        
+        # Format response to match frontend expectations
+        print("Kết quả call LLM: ")
+        print(slm_result)
         return {
-            "predicted_value": parsed.get("total_amount"),
+            "predicted_value": slm_result.total_amount,
             "confidence": 1.0,
             "candidates": [],
             "status": "llm_fallback",
-            "currency": parsed.get("currency", "VND"),
+            "currency": slm_result.currency,
             "structured_data": {
-                "bill_purpose": parsed.get("bill_purpose"),
-                "bill_date": parsed.get("bill_date"),
-                "currency": parsed.get("currency"),
-                "total_amount": parsed.get("total_amount"),
+                "bill_date": slm_result.date,
+                "currency": slm_result.currency,
+                "total_amount": slm_result.total_amount
             }
         }
-
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Gemini returned non-JSON response. Try again.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM Parse Error: {e}")
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        raise HTTPException(status_code=500, detail=f"LLM Processing Error: {e}")
 
 
 if __name__ == "__main__":

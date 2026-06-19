@@ -342,15 +342,13 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
     for i, c in enumerate(candidates):
         raw_score = float(probs[i])
         # --- ĐIỀU CHỈNH THEO NGỮ NGHĨA (Semantic Reweighting) ---
-        # Nếu NLP không tìm thấy bất kỳ sự liên quan nào đến "Tổng tiền",
-        # giảm điểm XGBoost xuống 50% để ngăn "tên món ăn" hoặc
-        # "số ngẫu nhiên" chiếm Top 1 nhờ vị trí cuối trang.
+        # Tăng ảnh hưởng của semantic_sim để vượt qua các sai lệch điểm số XGBoost nhỏ
         if c['semantic_sim'] < 0.05:
-            c['xgb_score'] = raw_score * 0.5
+            c['xgb_score'] = raw_score * 0.1
         elif c['semantic_sim'] < 0.15:
-            c['xgb_score'] = raw_score * 0.75
+            c['xgb_score'] = raw_score * 0.5
         else:
-            c['xgb_score'] = raw_score
+            c['xgb_score'] = raw_score * (0.5 + c['semantic_sim'])
 
     best = max(candidates, key=lambda x: x['xgb_score'])
 

@@ -133,7 +133,9 @@ const App: React.FC = () => {
       return;
     }
     const response = await apiService.callLlmFallback(ocrText);
-    setCandidates(response.candidates || []);
+    if (response.candidates && response.candidates.length > 0) {
+      setCandidates(response.candidates);
+    }
     setApiStatus(response.status || 'llm_fallback');
     setPendingBill(prev => ({ ...prev, ...mapResponseToBill(response) }));
   };

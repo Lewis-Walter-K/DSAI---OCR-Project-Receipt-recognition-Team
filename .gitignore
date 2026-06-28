@@ -37,6 +37,7 @@ test picture/
 prompt
 setup_env.bat
 requirements_utf8.txt
-
+__pycache__/
+.env
 
 temp_ocr_results.json

@@ -34,7 +34,6 @@ OCR_TEMP        = CURRENT_DIR / "temp_ocr_results.json"
 # ─────────────────────────────────────────────────────
 print("🚀 Đang khởi tạo các mô hình AI... Vui lòng đợi.")
 
-model_detect  = YOLO(str(SEG_MODELS / "best-detect.pt"))
 model_segment = YOLO(str(SEG_MODELS / "best-seg.pt"))
 
 embedding_model = SentenceTransformer(
@@ -153,30 +152,25 @@ def _flatten_receipt(image, pts):
 
 def img_scanner(img_path: str) -> str | None:
     """
-    Detect → Segment → Flatten → Rotate → Threshold.
+    Segment directly on full image -> Flatten -> Adaptive Threshold.
     Returns path to the cleaned image ready for OCR.
     """
     img_original = cv2.imread(img_path)
     if img_original is None:
         raise ValueError(f"Không thể đọc ảnh: {img_path}")
 
-    # --- Detect ---
-    det_results = model_detect(img_original)
-    if not det_results[0].boxes:
-        print("❌ Không detect được vùng chứa hóa đơn.")
+    # --- Segment (Directly on full image) ---
+    seg_results = model_segment(img_original)
+    
+    if not seg_results[0].boxes or seg_results[0].masks is None:
+        print("❌ Không tìm thấy hóa đơn hoặc mặt nạ đa giác.")
         return None
 
-    best_idx = int(det_results[0].boxes.conf.argmax())
-    x1, y1, x2, y2 = map(int, det_results[0].boxes[best_idx].xyxy[0].tolist())
-    cropped = img_original[y1:y2, x1:x2]
-
-    # --- Segment ---
-    seg_results = model_segment(cropped)
-    if seg_results[0].masks is None:
-        print("⚠️ Không tìm thấy mặt nạ đa giác.")
-        return None
-
-    polygon = seg_results[0].masks.xy[0]
+    # Get the index of the detection with the highest confidence
+    best_idx = int(seg_results[0].boxes.conf.argmax())
+    
+    # Extract the polygon mask for that specific detection
+    polygon = seg_results[0].masks.xy[best_idx]
     contour = np.array(polygon, dtype=np.int32)
 
     peri   = cv2.arcLength(contour, True)
@@ -187,10 +181,9 @@ def img_scanner(img_path: str) -> str | None:
     ).astype(int)
 
     # --- Flatten ---
-    flat = _flatten_receipt(cropped, pts)
-
-    # --- Rotate (Tesseract OSD) ---
-    # Removed Tesseract OSD in favor of PaddleOCR's built-in angle classifier.
+    # Note: We pass img_original here because the mask coordinates 
+    # are now relative to the full image, not a crop.
+    flat = _flatten_receipt(img_original, pts)
 
     # --- Adaptive threshold (CamScanner-style) ---
     gray     = cv2.cvtColor(flat, cv2.COLOR_BGR2GRAY)
@@ -204,10 +197,7 @@ def img_scanner(img_path: str) -> str | None:
     print(f"✅ Ảnh đã xuất tại: {output_path}")
     return str(output_path)
 
-
-# ─────────────────────────────────────────────────────
 #  STEP 2: OCR  (PaddleOCR via subprocess)
-# ─────────────────────────────────────────────────────
 def run_ocr(image_path: str) -> tuple[list, float]:
     """Run PaddleOCR in a subprocess to avoid GPU memory conflicts."""
     subprocess.run(
@@ -368,24 +358,11 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
     for i, c in enumerate(candidates):
         raw_score = float(probs[i])
         # --- ĐIỀU CHỈNH THEO NGỮ NGHĨA (Semantic Reweighting) ---
-        # Nếu NLP không tìm thấy bất kỳ sự liên quan nào đến "Tổng tiền",
-        # giảm điểm XGBoost xuống 50% để ngăn "tên món ăn" hoặc
-        # "số ngẫu nhiên" chiếm Top 1 nhờ vị trí cuối trang.
-        # if c['semantic_sim'] < 0.05:
-        #     c['xgb_score'] = raw_score * 0.5
-        # elif c['semantic_sim'] < 0.15:
-        #     c['xgb_score'] = raw_score * 0.75
-        # else:
-        #     c['xgb_score'] = raw_score
-
-        # --- ĐIỀU CHỈNH THEO NGỮ NGHĨA (Semantic Reweighting) ---
         if c['semantic_sim'] < 0.05:
             c['xgb_score'] = raw_score * 0.1
         elif c['semantic_sim'] < 0.15:
             c['xgb_score'] = raw_score * 0.75
         elif c['semantic_sim'] >= 0.7:
-            # 🚀 QUYỀN PHỦ QUYẾT: Ngữ nghĩa quá rõ ràng -> Ép điểm XGBoost lên 95%
-            # Để đảm bảo nó CHẮC CHẮN lọt vào Top 5 cho NLI đọc
             c['xgb_score'] = max(raw_score, 0.95)
         elif c['semantic_sim'] >= 0.5:
             # Khuyến khích nhẹ nếu ngữ nghĩa khá ổn
@@ -406,7 +383,7 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
     all_sem_zero = all(c['semantic_sim'] == 0.0 for c in candidates)
     MIN_CONFIDENCE = 0.25 if all_sem_zero else 0.4
     if all_sem_zero:
-        print("⚠️ NLP hoàn toàn thất bại (OCR lỗi / ngôn ngữ chưa hỗ trợ) → dùng structural-only mode (ngưỡng 25%).")
+        print("NLP hoàn toàn thất bại (OCR lỗi / ngôn ngữ chưa hỗ trợ) → dùng structural-only mode (ngưỡng 25%).")
 
     is_confident = best['xgb_score'] >= MIN_CONFIDENCE
 
@@ -495,7 +472,6 @@ def _semantic_sim_from_vec(vec, text: str) -> float:
 FEEDBACK_CSV = CURRENT_DIR / "feedback_dataset.csv"
 FEATURE_COLS = ['semantic_sim', 'normalized_y', 'is_max', 'text_length', 'has_currency', 'label']
 
-
 def save_feedback(candidates: list, correct_value: float) -> bool:
     """Match correct_value to a candidate, save its features for retraining.
     
@@ -536,13 +512,12 @@ def save_feedback(candidates: list, correct_value: float) -> bool:
     print(f"✅ Đã lưu {len(rows)} dòng feedback vào {FEEDBACK_CSV}")
     return True
 
-
 # ─────────────────────────────────────────────────────
 #  END-TO-END PIPELINE
 # ─────────────────────────────────────────────────────
 def process_invoice(raw_image_path: str) -> dict:
     """Run full pipeline. Returns a dict for the app to consume:
-    
+
     {
         'predicted_value': float | None,
         'confidence':      float,
@@ -569,11 +544,11 @@ def process_invoice(raw_image_path: str) -> dict:
     try:
         flat_path = img_scanner(raw_image_path)
     except Exception as e:
-        print(f"❌ Lỗi Segmentation: {e}")
+        print(f"Lỗi Segmentation: {e}")
         return result
 
     if not flat_path or not os.path.exists(flat_path):
-        print("❌ Không thể xuất ảnh nắn phẳng.")
+        print("Không thể xuất ảnh nắn phẳng.")
         return result
 
     result['flat_image_path'] = flat_path
@@ -583,11 +558,11 @@ def process_invoice(raw_image_path: str) -> dict:
     try:
         ocr_data, img_height = run_ocr(flat_path)
     except subprocess.CalledProcessError as e:
-        print(f"❌ OCR subprocess crash! Code: {e.returncode}")
+        print(f"OCR subprocess crash! Code: {e.returncode}")
         return result
 
     if not ocr_data:
-        print("❌ Không đọc được chữ nào trên hóa đơn.")
+        print("Không đọc được chữ nào trên hóa đơn.")
         return result
 
     # Build raw OCR text for SLM fallback
@@ -611,21 +586,6 @@ def process_invoice(raw_image_path: str) -> dict:
         print(f"🎯 KẾT QUẢ CUỐI CÙNG: {result['predicted_value']}")
     else:
         print("⚠️ XGBoost & NLI không tự tin — (SLM FALLBACK IS TEMPORARILY DISABLED)")
-        # import sys
-        # slm_path = str(CURRENT_DIR.parent / "SLM")
-        # if slm_path not in sys.path:
-        #     sys.path.append(slm_path)
-        # from slm_api import process_ocr_with_gemini
-        # 
-        # slm_result = process_ocr_with_gemini(result['ocr_text'])
-        # print(f"🧠 SLM JSON OUTPUT:\n{slm_result.model_dump_json(indent=2)}")
-        # 
-        # # Update pipeline result with SLM fallback data
-        # result['predicted_value'] = slm_result.total_amount
-        # result['status'] = 'slm_fallback'
-        # # Pass the full JSON structure back to the frontend/database
-        # result['structured_data'] = slm_result.model_dump()
-        
     print(f"{'='*50}\n")
 
     return result
@@ -664,6 +624,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     result = process_invoice(img_path)
-    print("===RESULT_JSON_START===")
-    print(json.dumps(result))
-    print("===RESULT_JSON_END===")
+    # DEBUGGING PART 
+
+    # print("===RESULT_JSON_START===")
+    # print(json.dumps(result))
+    # print("===RESULT_JSON_END===")

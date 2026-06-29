@@ -154,7 +154,7 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
 
     best = max(candidates, key=lambda x: x['xgb_score'])
 
-    print("\n🔍 --- BẢNG XẾP HẠNG ỨNG VIÊN TỔNG TIỀN (XGBOOST) ---")
+    print("\n --- BẢNG XẾP HẠNG ỨNG VIÊN TỔNG TIỀN (XGBOOST) ---")
     for c in sorted(candidates, key=lambda x: x['xgb_score'], reverse=True)[:5]:
         print(f"Value: {c['value']:>10.2f} | Score: {c['xgb_score']*100:>5.1f}% | Sem: {c['semantic_sim']:.2f} | is_max: {c['is_max']} | y: {c['normalized_y']:.2f} | Context: '{c['neighbor']}'")
 
@@ -165,7 +165,7 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
 
     is_confident = best['xgb_score'] >= MIN_CONFIDENCE
 
-    print("\n🧠 Kích hoạt NLI Reranker theo thứ tự: Sem > NLI > XGBoost...")
+    print("\nKích hoạt NLI Reranker theo thứ tự: Sem > NLI > XGBoost...")
     if all_sem_zero:
         top_5 = sorted(candidates, key=lambda x: x['xgb_score'], reverse=True)[:5]
     else:
@@ -189,7 +189,7 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
     if nli_promoted:
         best = nli_promoted
         is_confident = True
-        print(f"\n🎯 NLI RERANK CHỐT: {best['value']} (NLI Conf: {nli_best_score*100:.1f}%, Sem: {best['semantic_sim']:.2f})")
+        print(f"\nNLI RERANK CHỐT: {best['value']} (NLI Conf: {nli_best_score*100:.1f}%, Sem: {best['semantic_sim']:.2f})")
     elif not is_confident:
         print("\n⚠️ XGBoost & NLI đều không tự tin — cần fallback SLM hoặc user validation.")
 

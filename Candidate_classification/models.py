@@ -62,10 +62,20 @@ _tax_prompts = _flatten([
     "세금, 부가세, 소비세",
 ])
 
-POSITIVE_VECTORS = embedding_model.encode(_pos_prompts)
-NEGATIVE_VECTORS = embedding_model.encode(_neg_prompts)
-QUANTITY_VECTORS = embedding_model.encode(_qty_prompts)
-TAX_VECTORS = embedding_model.encode(_tax_prompts)
+_time_prompts = _flatten([
+    "time, hour, check-in time, check-out time, opening time, timestamp, date and time",
+    "giờ vào, giờ ra, thời gian, ngày giờ, giờ mở cửa, thời điểm",
+    "gio vao, gio ra, thoi gian, ngay gio, gio mo cua, thoi diem, gio",
+    "时间, 日期, 入店时间, 离店时间, 营业时间",
+    "時間, 日時, チェックイン, チェックアウト",
+    "시간, 날짜, 체크인, 체크아웃",
+])
+
+POSITIVE_VECTORS  = embedding_model.encode(_pos_prompts)
+NEGATIVE_VECTORS  = embedding_model.encode(_neg_prompts)
+QUANTITY_VECTORS  = embedding_model.encode(_qty_prompts)
+TAX_VECTORS       = embedding_model.encode(_tax_prompts)
+TIME_VECTORS      = embedding_model.encode(_time_prompts)
 
 CURRENCY_PATTERN = re.compile(
     r'[\$€£¥₩₹₽₺₴₦฿₫₱¢]|USD|EUR|EURO|VND|JPY|GBP|AUD|CAD|SGD|CHF',

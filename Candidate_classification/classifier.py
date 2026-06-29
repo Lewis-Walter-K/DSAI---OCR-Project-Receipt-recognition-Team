@@ -2,8 +2,8 @@ import re
 import numpy as np
 import pandas as pd
 from models import (embedding_model, POSITIVE_VECTORS, NEGATIVE_VECTORS,
-                    QUANTITY_VECTORS, TAX_VECTORS, CURRENCY_PATTERN,
-                    NUMBER_PATTERN, xgb_model, nli_classifier)
+                    QUANTITY_VECTORS, TAX_VECTORS, TIME_VECTORS,
+                    CURRENCY_PATTERN, NUMBER_PATTERN, xgb_model, nli_classifier)
 from config import FEEDBACK_CSV
 
 
@@ -33,10 +33,11 @@ def _semantic_sim_from_vec(vec, text: str) -> float:
         return 0.0
 
     from sklearn.metrics.pairwise import cosine_similarity
-    pos_sim = float(np.max(cosine_similarity([vec], POSITIVE_VECTORS)))
-    neg_sim = float(np.max(cosine_similarity([vec], NEGATIVE_VECTORS)))
-    qty_sim = float(np.max(cosine_similarity([vec], QUANTITY_VECTORS)))
-    tax_sim = float(np.max(cosine_similarity([vec], TAX_VECTORS)))
+    pos_sim  = float(np.max(cosine_similarity([vec], POSITIVE_VECTORS)))
+    neg_sim  = float(np.max(cosine_similarity([vec], NEGATIVE_VECTORS)))
+    qty_sim  = float(np.max(cosine_similarity([vec], QUANTITY_VECTORS)))
+    tax_sim  = float(np.max(cosine_similarity([vec], TAX_VECTORS)))
+    time_sim = float(np.max(cosine_similarity([vec], TIME_VECTORS)))
 
     if pos_sim < 0.15:
         return 0.0
@@ -45,6 +46,8 @@ def _semantic_sim_from_vec(vec, text: str) -> float:
     if qty_sim >= pos_sim:
         return 0.0
     if tax_sim >= pos_sim:
+        return 0.0
+    if time_sim >= pos_sim:   # ← Gate mới: chặn giờ/ngày/timestamp
         return 0.0
 
     return pos_sim
@@ -166,32 +169,66 @@ def predict_total_with_xgboost(ocr_results: list, img_height: float) -> dict | N
     is_confident = best['xgb_score'] >= MIN_CONFIDENCE
 
     print("\n🧠 Kích hoạt NLI Reranker theo thứ tự: Sem > NLI > XGBoost...")
-    if all_sem_zero:
-        top_5 = sorted(candidates, key=lambda x: x['xgb_score'], reverse=True)[:5]
-    else:
-        top_5 = sorted(candidates, key=lambda x: (x['semantic_sim'], x['xgb_score']), reverse=True)[:5]
 
-    nli_promoted = None
-    nli_best_score = 0.0
+    # ── Top 5: MiniLM Sem is primary gate, XGB is tiebreaker ────────────────
+    top_5 = sorted(candidates, key=lambda x: (x['semantic_sim'], x['xgb_score']), reverse=True)[:5]
+
+    # ── Late Fusion: NLI Margin-Based Gating + 3-Signal Fusion ──────────────
+    # Gating signal  = NLI confidence MARGIN (score_total − score_2nd_best).
+    # Large margin   → NLI is decisive           → w(0.30 / 0.50 / 0.20)
+    # Medium margin  → NLI is moderate           → w(0.40 / 0.40 / 0.20)
+    # Small margin   → NLI confused              → w(0.50 / 0.20 / 0.30)
+    # Final score    = w_xgb*XGB + w_nli*NLI + w_sem*Sem
+    NLI_LABELS = [
+        "total amount to pay",
+        "tax amount",
+        "transaction code or ID",
+        "item quantity or subtotal",
+        "cash received or change given",
+    ]
+
+    best_final_candidate = None
+    highest_final_score  = 0.0
 
     for c in top_5:
-        if len(c['neighbor'].strip()) < 3:
-            continue
-        result = nli_classifier(c['neighbor'], ["total amount to pay", "tax amount", "transaction code or ID", "item quantity or subtotal"])
-        best_label = result['labels'][0]
-        best_prob = result['scores'][0]
-        print(f"   - NLI đọc '{c['neighbor']}' [Sem: {c['semantic_sim']:.2f}]: {best_label} ({best_prob*100:.1f}%)")
-        if best_label == "total amount to pay" and best_prob >= 0.40:
-            if best_prob > nli_best_score:
-                nli_promoted = c
-                nli_best_score = best_prob
+        xgb_conf = c['xgb_score']
+        sem      = c['semantic_sim']
 
-    if nli_promoted:
-        best = nli_promoted
-        is_confident = True
-        print(f"\n🎯 NLI RERANK CHỐT: {best['value']} (NLI Conf: {nli_best_score*100:.1f}%, Sem: {best['semantic_sim']:.2f})")
-    elif not is_confident:
-        print("\n⚠️ XGBoost & NLI đều không tự tin — cần fallback SLM hoặc user validation.")
+        if len(c['neighbor'].strip()) < 3:
+            total_prob = 0.0
+            nli_margin = 0.0
+        else:
+            result        = nli_classifier(c['neighbor'], NLI_LABELS)
+            scores_map    = dict(zip(result['labels'], result['scores']))
+            total_prob    = scores_map.get("total amount to pay", 0.0)
+            sorted_scores = sorted(result['scores'], reverse=True)
+            nli_margin    = sorted_scores[0] - sorted_scores[1]
+
+        if nli_margin >= 0.25:
+            w_xgb, w_nli, w_sem = 0.30, 0.50, 0.20
+        elif nli_margin >= 0.10:
+            w_xgb, w_nli, w_sem = 0.40, 0.40, 0.20
+        else:
+            w_xgb, w_nli, w_sem = 0.50, 0.20, 0.30
+
+        final_score      = (xgb_conf * w_xgb) + (total_prob * w_nli) + (sem * w_sem)
+        c['final_score'] = final_score
+
+        print(f"   - '{c['neighbor'][:40]}' | XGB:{xgb_conf*100:.0f}% NLI:{total_prob*100:.0f}% Sem:{sem*100:.2f}% Margin:{nli_margin:.2f}")
+        print(f"     => w({w_xgb}/{w_nli}/{w_sem}) | Final: {final_score*100:.1f}%")
+
+        if final_score > highest_final_score:
+            highest_final_score  = final_score
+            best_final_candidate = c
+
+    if best_final_candidate is None:
+        best_final_candidate = best
+
+    best         = best_final_candidate
+    is_confident = highest_final_score >= MIN_CONFIDENCE
+    print(f"\n🎯 LATE FUSION CHỐT: {best['value']} (Final Score: {highest_final_score*100:.1f}%)")
+    if not is_confident:
+        print("\n⚠️ Không đủ tự tin — cần fallback SLM hoặc user validation.")
 
     return {'predicted_value': best['value'] if is_confident else None, 'currency': best.get('currency') if is_confident else None, 'confidence': best['xgb_score'], 'candidates': candidates}
 

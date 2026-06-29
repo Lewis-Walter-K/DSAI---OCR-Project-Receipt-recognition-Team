@@ -13,7 +13,7 @@ from pathlib import Path
 
 # Setup paths
 CURRENT_DIR = Path(__file__).resolve().parent
-DATA_PATH = CURRENT_DIR / "xgboost_dataset.csv"
+DATA_PATH = CURRENT_DIR / "training" / "xgboost_dataset.csv"
 REPORT_DIR = CURRENT_DIR / "outputs" / "report"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -96,8 +96,8 @@ plt.close()
 
 # Graph 3: Confusion Matrix
 plt.figure(figsize=(8, 6))
-cm = confusion_matrix(y_test, y_pred)
-sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False,
+cm = confusion_matrix(y_test, y_pred, normalize='true')
+sns.heatmap(cm, annot=True, fmt=".2%", cmap="Blues", cbar=False,
             xticklabels=["Not Total", "Total"],
             yticklabels=["Not Total", "Total"])
 plt.title('Confusion Matrix')
